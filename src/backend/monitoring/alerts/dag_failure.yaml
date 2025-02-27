@@ -1,0 +1,132 @@
+# Cloud Monitoring alert policy for DAG failures in Cloud Composer 2 with Airflow 2.X
+# Package Version: google-cloud-monitoring 2.0.0
+
+displayName: DAG Failure Alert
+
+documentation:
+  content: |
+    # DAG Failure Alert
+
+    This alert policy monitors DAG failures in Cloud Composer 2 environments running Airflow 2.X. It is designed to detect workflow failures that could impact business processes and system reliability.
+
+    ## Conditions
+    - Critical DAG Failure: Immediate alert when business-critical DAGs fail (etl_main, data_sync, reports_gen)
+    - High Failure Rate: Alert when more than 3 DAGs fail within an hour
+    - Repeated Failures: Alert when the same DAG fails more than twice in a 24-hour period
+    - Schedule Delay: Alert when DAG scheduling is delayed by more than 15 minutes
+
+    ## Notification Channels
+    - Email to operations team
+    - Slack alerts to environment-specific channels
+    - PagerDuty for critical alerts in production
+
+    ## Remediation
+    1. Check Airflow logs for specific error messages
+    2. Examine DAG code and configuration for issues
+    3. Verify connectivity to dependent services
+    4. Check resource utilization (CPU, memory, disk)
+    5. Investigate potential data issues with source systems
+    6. For schedule delays, check scheduler logs and performance
+    7. Reference the runbook for detailed recovery procedures
+  mimeType: text/markdown
+
+combiner: OR
+
+conditions:
+  - displayName: Critical DAG Failure
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/dag/run/failed_count" AND resource.type="cloud_composer_environment" AND (metadata.system_labels.dag_id=monitoring.regex.full_match("etl_main") OR metadata.system_labels.dag_id=monitoring.regex.full_match("data_sync") OR metadata.system_labels.dag_id=monitoring.regex.full_match("reports_gen"))'
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_DELTA
+          crossSeriesReducer: REDUCE_SUM
+          groupByFields:
+            - metadata.system_labels.dag_id
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+      trigger:
+        count: 1
+    severity: SEVERITY_CRITICAL
+
+  - displayName: High DAG Failure Rate
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/dag/run/failed_count" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 3600s
+          perSeriesAligner: ALIGN_DELTA
+          crossSeriesReducer: REDUCE_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 3
+      duration: 300s
+      trigger:
+        count: 1
+    severity: SEVERITY_WARNING
+
+  - displayName: Repeated DAG Failures
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/dag/run/failed_count" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 86400s
+          perSeriesAligner: ALIGN_DELTA
+          crossSeriesReducer: REDUCE_SUM
+          groupByFields:
+            - metadata.system_labels.dag_id
+      comparison: COMPARISON_GT
+      thresholdValue: 2
+      duration: 600s
+      trigger:
+        count: 1
+    severity: SEVERITY_WARNING
+
+  - displayName: DAG Schedule Delay
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/dag/schedule_delay" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 300s
+          perSeriesAligner: ALIGN_PERCENTILE_95
+          crossSeriesReducer: REDUCE_MEAN
+          groupByFields:
+            - metadata.system_labels.dag_id
+      comparison: COMPARISON_GT
+      thresholdValue: 900
+      duration: 300s
+      trigger:
+        count: 1
+    severity: SEVERITY_WARNING
+
+notificationChannels:
+  - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+  - projects/${PROJECT_ID}/notificationChannels/${SLACK_CHANNEL_ID}
+  - projects/${PROJECT_ID}/notificationChannels/${PAGERDUTY_CHANNEL_ID}
+
+alertStrategy:
+  autoClose: 86400s
+  notificationRateLimit:
+    period: 3600s
+
+userLabels:
+  severity: critical
+  category: workflow
+  environment: composer2
+  version: 2.x
+
+enabled: true
+
+environment_variables:
+  dev:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_DEV_CHANNEL_ID}
+    severity: WARNING
+  qa:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_QA_CHANNEL_ID}
+    severity: WARNING
+  prod:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_PROD_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${PAGERDUTY_CHANNEL_ID}
+    severity: CRITICAL
