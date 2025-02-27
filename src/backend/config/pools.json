@@ -1,0 +1,27 @@
+[
+  {
+    "name": "default_pool",
+    "slots": 128,
+    "description": "Default pool for tasks that don't specify a pool, with environment-specific slot limits"
+  },
+  {
+    "name": "etl_pool",
+    "slots": 32,
+    "description": "Dedicated pool for ETL workloads with optimized concurrency settings"
+  },
+  {
+    "name": "data_sync_pool",
+    "slots": 24,
+    "description": "Pool for data synchronization tasks with controlled concurrency to prevent API rate limiting"
+  },
+  {
+    "name": "reporting_pool",
+    "slots": 16,
+    "description": "Pool for reporting and analytics tasks with appropriate concurrency limits"
+  },
+  {
+    "name": "high_priority_pool",
+    "slots": 8,
+    "description": "Dedicated pool for critical and time-sensitive tasks with guaranteed resource allocation"
+  }
+]
