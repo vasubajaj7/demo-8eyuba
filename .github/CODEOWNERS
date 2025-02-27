@@ -1,0 +1,51 @@
+* @organization/architects @organization/lead-developers
+
+# Workflow related files
+.github/workflows/* @organization/devops @organization/architects
+.github/CODEOWNERS @organization/architects
+.github/PULL_REQUEST_TEMPLATE.md @organization/architects @organization/lead-developers
+
+# Airflow code files
+src/backend/dags/* @organization/airflow-developers @organization/data-engineers
+src/backend/dags/utils/* @organization/airflow-developers
+src/backend/plugins/* @organization/airflow-developers @organization/architects
+src/backend/plugins/hooks/* @organization/airflow-developers
+src/backend/plugins/operators/* @organization/airflow-developers
+src/backend/plugins/sensors/* @organization/airflow-developers
+src/backend/plugins/macros/* @organization/airflow-developers
+
+# Configuration files
+src/backend/config/* @organization/devops @organization/architects
+src/backend/config/variables.json @organization/airflow-developers @organization/devops
+src/backend/config/connections.json @organization/airflow-developers @organization/security-team
+
+# Migration related files
+src/backend/migrations/* @organization/architects @organization/database-team
+src/backend/migrations/migration_airflow1_to_airflow2.py @organization/architects @organization/airflow-developers
+
+# Script files
+src/backend/scripts/* @organization/devops @organization/airflow-developers
+src/backend/scripts/validate_dags.py @organization/airflow-developers
+src/backend/scripts/deploy_dags.py @organization/devops @organization/airflow-developers
+
+# Infrastructure files
+src/backend/terraform/* @organization/devops @organization/cloud-infrastructure
+infrastructure/* @organization/devops @organization/cloud-infrastructure
+
+# CI/CD files
+src/backend/ci-cd/* @organization/devops @organization/architects
+src/backend/ci-cd/approval-workflow.json @organization/architects @organization/lead-developers
+
+# Testing files
+src/test/* @organization/qa @organization/airflow-developers
+src/test/migration_tests/* @organization/qa @organization/architects @organization/airflow-developers
+
+# Documentation files
+src/backend/docs/* @organization/technical-writers @organization/airflow-developers
+src/backend/docs/migration_guide.md @organization/architects @organization/airflow-developers
+
+# Security files
+src/test/security_tests/* @organization/security-team @organization/architects
+
+# Deployment files
+src/test/deployment_tests/* @organization/devops @organization/qa
