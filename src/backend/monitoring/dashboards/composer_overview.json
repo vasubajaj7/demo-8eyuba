@@ -1,0 +1,708 @@
+{
+  "displayName": "Cloud Composer 2 Overview Dashboard",
+  "gridLayout": {
+    "columns": 12,
+    "widgets": [
+      {
+        "title": "Environment Health Status",
+        "scorecard": {
+          "timeSeriesQuery": {
+            "timeSeriesFilter": {
+              "filter": "metric.type=\"composer.googleapis.com/environment/healthy\" resource.type=\"cloud_composer_environment\"",
+              "aggregation": {
+                "perSeriesAligner": "ALIGN_MEAN",
+                "crossSeriesReducer": "REDUCE_MIN"
+              }
+            }
+          },
+          "sparkChartView": {
+            "sparkChartType": "SPARK_LINE"
+          },
+          "thresholds": [
+            {
+              "value": 0,
+              "color": "RED"
+            },
+            {
+              "value": 1,
+              "color": "GREEN"
+            }
+          ]
+        },
+        "width": 3,
+        "height": 3,
+        "placement": {
+          "row": 0,
+          "column": 0
+        }
+      },
+      {
+        "title": "Uptime (30 Days)",
+        "gauge": {
+          "timeSeriesQuery": {
+            "timeSeriesFilter": {
+              "filter": "metric.type=\"composer.googleapis.com/environment/uptime\" resource.type=\"cloud_composer_environment\"",
+              "aggregation": {
+                "perSeriesAligner": "ALIGN_MEAN",
+                "crossSeriesReducer": "REDUCE_MEAN"
+              }
+            }
+          },
+          "min": 0,
+          "max": 100,
+          "valueFormat": "PERCENTAGE",
+          "thresholds": [
+            {
+              "value": 0,
+              "color": "RED"
+            },
+            {
+              "value": 99,
+              "color": "YELLOW"
+            },
+            {
+              "value": 99.9,
+              "color": "GREEN"
+            }
+          ]
+        },
+        "width": 3,
+        "height": 3,
+        "placement": {
+          "row": 0,
+          "column": 3
+        }
+      },
+      {
+        "title": "DAG Success Rate",
+        "gauge": {
+          "timeSeriesQuery": {
+            "timeSeriesFilterRatio": {
+              "numerator": {
+                "filter": "metric.type=\"composer.googleapis.com/environment/dag/run/succeeded_count\" resource.type=\"cloud_composer_environment\"",
+                "aggregation": {
+                  "perSeriesAligner": "ALIGN_DELTA",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "denominator": {
+                "filter": "metric.type=\"composer.googleapis.com/environment/dag/run/count\" resource.type=\"cloud_composer_environment\"",
+                "aggregation": {
+                  "perSeriesAligner": "ALIGN_DELTA",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              }
+            }
+          },
+          "min": 0,
+          "max": 100,
+          "valueFormat": "PERCENTAGE",
+          "thresholds": [
+            {
+              "value": 0,
+              "color": "RED"
+            },
+            {
+              "value": 95,
+              "color": "YELLOW"
+            },
+            {
+              "value": 99,
+              "color": "GREEN"
+            }
+          ]
+        },
+        "width": 3,
+        "height": 3,
+        "placement": {
+          "row": 0,
+          "column": 6
+        }
+      },
+      {
+        "title": "Task Success Rate",
+        "gauge": {
+          "timeSeriesQuery": {
+            "timeSeriesFilterRatio": {
+              "numerator": {
+                "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/succeeded_count\" resource.type=\"cloud_composer_environment\"",
+                "aggregation": {
+                  "perSeriesAligner": "ALIGN_DELTA",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "denominator": {
+                "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/count\" resource.type=\"cloud_composer_environment\"",
+                "aggregation": {
+                  "perSeriesAligner": "ALIGN_DELTA",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              }
+            }
+          },
+          "min": 0,
+          "max": 100,
+          "valueFormat": "PERCENTAGE",
+          "thresholds": [
+            {
+              "value": 0,
+              "color": "RED"
+            },
+            {
+              "value": 95,
+              "color": "YELLOW"
+            },
+            {
+              "value": 99,
+              "color": "GREEN"
+            }
+          ]
+        },
+        "width": 3,
+        "height": 3,
+        "placement": {
+          "row": 0,
+          "column": 9
+        }
+      },
+      {
+        "title": "DAG Parsing Time",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag_processing/duration_seconds\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                    "crossSeriesReducer": "REDUCE_MEAN"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1"
+            }
+          ],
+          "yAxis": {
+            "label": "Duration (seconds)",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 30,
+              "label": "Target < 30s",
+              "color": "RED",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 3,
+          "column": 0
+        }
+      },
+      {
+        "title": "Component Health",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/component/health\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.component"
+                    ]
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "legendTemplate": "{{metadata.system_labels.component}}"
+            }
+          ],
+          "yAxis": {
+            "label": "Health Status",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 3,
+          "column": 6
+        }
+      },
+      {
+        "title": "DAG Status Distribution",
+        "pieChart": {
+          "chartType": "PIE",
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/status_count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_SUM",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metadata.system_labels.status"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "width": 4,
+        "height": 4,
+        "placement": {
+          "row": 7,
+          "column": 0
+        }
+      },
+      {
+        "title": "Scheduler Heartbeat",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/scheduler_heartbeat\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_MEAN"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1"
+            }
+          ],
+          "yAxis": {
+            "label": "Heartbeat Rate",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 4,
+        "height": 4,
+        "placement": {
+          "row": 7,
+          "column": 4
+        }
+      },
+      {
+        "title": "Worker Count",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/worker/count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metadata.system_labels.status"
+                    ]
+                  }
+                }
+              },
+              "plotType": "STACKED_BAR",
+              "targetAxis": "Y1",
+              "legendTemplate": "{{metadata.system_labels.status}}"
+            }
+          ],
+          "yAxis": {
+            "label": "Worker Count",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 4,
+        "height": 4,
+        "placement": {
+          "row": 7,
+          "column": 8
+        }
+      },
+      {
+        "title": "CPU Utilization by Component",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/cpu/utilization\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.component"
+                    ]
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "legendTemplate": "{{metadata.system_labels.component}}"
+            }
+          ],
+          "yAxis": {
+            "label": "CPU Utilization",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 0.8,
+              "label": "High CPU",
+              "color": "RED",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 11,
+          "column": 0
+        }
+      },
+      {
+        "title": "Memory Utilization by Component",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/memory/utilization\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.component"
+                    ]
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "legendTemplate": "{{metadata.system_labels.component}}"
+            }
+          ],
+          "yAxis": {
+            "label": "Memory Utilization",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 0.85,
+              "label": "High Memory",
+              "color": "RED",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 11,
+          "column": 6
+        }
+      },
+      {
+        "title": "Database Query Latency",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/database/query_latency\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                    "crossSeriesReducer": "REDUCE_MEAN"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1"
+            }
+          ],
+          "yAxis": {
+            "label": "Latency (ms)",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 15,
+          "column": 0
+        }
+      },
+      {
+        "title": "Task Queue Size by Pool",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/pool/queued_slots\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.pool"
+                    ]
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "legendTemplate": "{{metadata.system_labels.pool}}"
+            }
+          ],
+          "yAxis": {
+            "label": "Queued Tasks",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 15,
+          "column": 6
+        }
+      },
+      {
+        "title": "Webserver Requests",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/webserver/request_count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metadata.system_labels.status_code"
+                    ]
+                  }
+                }
+              },
+              "plotType": "STACKED_BAR",
+              "targetAxis": "Y1",
+              "legendTemplate": "HTTP {{metadata.system_labels.status_code}}"
+            }
+          ],
+          "yAxis": {
+            "label": "Requests/s",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 19,
+          "column": 0
+        }
+      },
+      {
+        "title": "DAG Storage Usage",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/storage/utilization\" resource.type=\"cloud_composer_environment\" AND metadata.system_labels.storage_type=\"dag_storage\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1"
+            }
+          ],
+          "yAxis": {
+            "label": "Storage Utilization",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 19,
+          "column": 6
+        }
+      },
+      {
+        "title": "Migration Progress",
+        "scorecard": {
+          "timeSeriesQuery": {
+            "timeSeriesFilter": {
+              "filter": "metric.type=\"composer.googleapis.com/migration/progress\" resource.type=\"cloud_composer_environment\"",
+              "aggregation": {
+                "perSeriesAligner": "ALIGN_MEAN",
+                "crossSeriesReducer": "REDUCE_MEAN"
+              }
+            }
+          },
+          "valueFormat": "PERCENTAGE",
+          "sparkChartView": {
+            "sparkChartType": "SPARK_LINE"
+          },
+          "thresholds": [
+            {
+              "value": 0,
+              "color": "RED"
+            },
+            {
+              "value": 50,
+              "color": "YELLOW"
+            },
+            {
+              "value": 90,
+              "color": "GREEN"
+            }
+          ]
+        },
+        "width": 4,
+        "height": 3,
+        "placement": {
+          "row": 23,
+          "column": 0
+        }
+      },
+      {
+        "title": "Functional Parity",
+        "scorecard": {
+          "timeSeriesQuery": {
+            "timeSeriesFilter": {
+              "filter": "metric.type=\"composer.googleapis.com/migration/functional_parity\" resource.type=\"cloud_composer_environment\"",
+              "aggregation": {
+                "perSeriesAligner": "ALIGN_MEAN",
+                "crossSeriesReducer": "REDUCE_MEAN"
+              }
+            }
+          },
+          "valueFormat": "PERCENTAGE",
+          "sparkChartView": {
+            "sparkChartType": "SPARK_LINE"
+          },
+          "thresholds": [
+            {
+              "value": 0,
+              "color": "RED"
+            },
+            {
+              "value": 95,
+              "color": "YELLOW"
+            },
+            {
+              "value": 100,
+              "color": "GREEN"
+            }
+          ]
+        },
+        "width": 4,
+        "height": 3,
+        "placement": {
+          "row": 23,
+          "column": 4
+        }
+      },
+      {
+        "title": "Test Cases Passing",
+        "scorecard": {
+          "timeSeriesQuery": {
+            "timeSeriesFilter": {
+              "filter": "metric.type=\"composer.googleapis.com/migration/test_success_rate\" resource.type=\"cloud_composer_environment\"",
+              "aggregation": {
+                "perSeriesAligner": "ALIGN_MEAN",
+                "crossSeriesReducer": "REDUCE_MEAN"
+              }
+            }
+          },
+          "valueFormat": "PERCENTAGE",
+          "sparkChartView": {
+            "sparkChartType": "SPARK_LINE"
+          },
+          "thresholds": [
+            {
+              "value": 0,
+              "color": "RED"
+            },
+            {
+              "value": 95,
+              "color": "YELLOW"
+            },
+            {
+              "value": 100,
+              "color": "GREEN"
+            }
+          ]
+        },
+        "width": 4,
+        "height": 3,
+        "placement": {
+          "row": 23,
+          "column": 8
+        }
+      },
+      {
+        "title": "Recent Failures",
+        "tableChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/run/failed_count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metadata.system_labels.dag_id"
+                    ]
+                  },
+                  "pickTimeSeriesFilter": {
+                    "rankingMethod": "METHOD_MAX",
+                    "numTimeSeries": 5
+                  }
+                }
+              }
+            }
+          ],
+          "columnSettings": [
+            {
+              "column": "metadata.system_labels.dag_id",
+              "displayName": "DAG ID"
+            },
+            {
+              "column": "value",
+              "displayName": "Failure Rate"
+            }
+          ]
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 26,
+          "column": 0
+        }
+      }
+    ]
+  },
+  "etag": "",
+  "labels": {
+    "category": "overview",
+    "component": "composer",
+    "environment": "composer2",
+    "version": "2.x"
+  }
+}
