@@ -1,0 +1,292 @@
+# Pod Security Policies for Cloud Composer 2 environments
+# These policies implement defense-in-depth security principles with varying levels of restriction
+# across development, QA, and production environments.
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: composer-restricted
+  annotations:
+    kubernetes.io/description: "This policy is the most restrictive policy, providing the highest level of security controls for production environments."
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/defaultProfileName: 'runtime/default'
+  labels:
+    environment: production
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  defaultAllowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - configMap
+    - emptyDir
+    - projected
+    - secret
+    - downwardAPI
+    - persistentVolumeClaim
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: MustRunAsNonRoot
+  seLinux:
+    rule: RunAsAny
+  supplementalGroups:
+    rule: MustRunAs
+    ranges:
+      - min: 1
+        max: 65535
+  fsGroup:
+    rule: MustRunAs
+    ranges:
+      - min: 1
+        max: 65535
+  readOnlyRootFilesystem: true
+  allowedHostPaths: []
+---
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: composer-baseline
+  annotations:
+    kubernetes.io/description: "This policy provides a baseline level of security for QA environments while allowing some flexibility."
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default,docker/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: 'runtime/default'
+  labels:
+    environment: qa
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  defaultAllowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - NET_RAW
+    - SYS_ADMIN
+    - SYS_CHROOT
+    - SETUID
+    - SETGID
+  volumes:
+    - configMap
+    - emptyDir
+    - projected
+    - secret
+    - downwardAPI
+    - persistentVolumeClaim
+    - hostPath
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: MustRunAsNonRoot
+  seLinux:
+    rule: RunAsAny
+  supplementalGroups:
+    rule: MustRunAs
+    ranges:
+      - min: 1
+        max: 65535
+  fsGroup:
+    rule: MustRunAs
+    ranges:
+      - min: 1
+        max: 65535
+  readOnlyRootFilesystem: false
+  allowedHostPaths:
+    - pathPrefix: /var/log
+      readOnly: true
+    - pathPrefix: /tmp
+      readOnly: false
+---
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: composer-permissive
+  annotations:
+    kubernetes.io/description: "This policy is more permissive for development environments to allow for testing and debugging."
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: '*'
+  labels:
+    environment: development
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+spec:
+  privileged: false
+  allowPrivilegeEscalation: true
+  defaultAllowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - NET_RAW
+    - SYS_ADMIN
+  allowedCapabilities:
+    - NET_BIND_SERVICE
+    - CHOWN
+    - DAC_OVERRIDE
+    - FOWNER
+    - FSETID
+    - KILL
+    - SETGID
+    - SETUID
+    - SETPCAP
+    - SYS_CHROOT
+  volumes:
+    - '*'
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: RunAsAny
+  seLinux:
+    rule: RunAsAny
+  supplementalGroups:
+    rule: RunAsAny
+  fsGroup:
+    rule: RunAsAny
+  readOnlyRootFilesystem: false
+  allowedHostPaths:
+    - pathPrefix: /var/log
+      readOnly: false
+    - pathPrefix: /tmp
+      readOnly: false
+    - pathPrefix: /etc/airflow
+      readOnly: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: composer-restricted-psp
+  labels:
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+rules:
+  - apiGroups: ["policy"]
+    resources: ["podsecuritypolicies"]
+    verbs: ["use"]
+    resourceNames: ["composer-restricted"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: composer-baseline-psp
+  labels:
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+rules:
+  - apiGroups: ["policy"]
+    resources: ["podsecuritypolicies"]
+    verbs: ["use"]
+    resourceNames: ["composer-baseline"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: composer-permissive-psp
+  labels:
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+rules:
+  - apiGroups: ["policy"]
+    resources: ["podsecuritypolicies"]
+    verbs: ["use"]
+    resourceNames: ["composer-permissive"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: composer-restricted-psp
+  namespace: composer-prod
+  labels:
+    environment: production
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: composer-restricted-psp
+subjects:
+  - kind: ServiceAccount
+    name: airflow-webserver
+    namespace: composer-prod
+  - kind: ServiceAccount
+    name: airflow-scheduler
+    namespace: composer-prod
+  - kind: ServiceAccount
+    name: airflow-worker
+    namespace: composer-prod
+  - kind: Group
+    name: system:serviceaccounts:composer-prod
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: composer-baseline-psp
+  namespace: composer-qa
+  labels:
+    environment: qa
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: composer-baseline-psp
+subjects:
+  - kind: ServiceAccount
+    name: airflow-webserver
+    namespace: composer-qa
+  - kind: ServiceAccount
+    name: airflow-scheduler
+    namespace: composer-qa
+  - kind: ServiceAccount
+    name: airflow-worker
+    namespace: composer-qa
+  - kind: Group
+    name: system:serviceaccounts:composer-qa
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: composer-permissive-psp
+  namespace: composer-dev
+  labels:
+    environment: development
+    app: airflow
+    component: security
+    version: 2.x
+    managed-by: terraform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: composer-permissive-psp
+subjects:
+  - kind: ServiceAccount
+    name: airflow-webserver
+    namespace: composer-dev
+  - kind: ServiceAccount
+    name: airflow-scheduler
+    namespace: composer-dev
+  - kind: ServiceAccount
+    name: airflow-worker
+    namespace: composer-dev
+  - kind: Group
+    name: system:serviceaccounts:composer-dev
+    apiGroup: rbac.authorization.k8s.io
