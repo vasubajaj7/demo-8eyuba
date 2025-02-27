@@ -1,0 +1,290 @@
+# Cloud Composer 2 Development Environment Configuration
+# This file defines development-specific configuration values for supplementary components
+# that work alongside the core Cloud Composer 2 environment with Airflow 2.X.
+
+# Global configuration values
+global:
+  environment: dev
+  project: composer2-migration-project-dev
+  region: us-central1
+  labels:
+    environment: dev
+    app: airflow
+    project: composer2-migration
+    managed-by: helm
+
+# Cloud Composer 2 configuration
+composer:
+  environmentName: composer2-dev
+  airflowVersion: 2.2.5
+  composerVersion: 2.0.25
+  scale:
+    nodeCount: 3
+    scheduler:
+      cpu: 4
+      memoryGb: 15.0
+      storageGb: 20
+      count: 1
+    webServer:
+      cpu: 2
+      memoryGb: 7.5
+      storageGb: 20
+    worker:
+      cpu: 4
+      memoryGb: 15.0
+      storageGb: 50
+      minCount: 2
+      maxCount: 6
+  location: us-central1
+  machineType: n1-standard-4
+  network: composer2-migration-dev-network
+  subnetwork: composer2-migration-dev-subnet
+  cloudSqlMachineType: db-n1-standard-2
+  dagProcessingCount: 2
+
+# Airflow configuration
+airflow:
+  config:
+    core-dags_are_paused_at_creation: "true"
+    core-parallelism: "32"
+    core-dag_concurrency: "16"
+    core-max_active_runs_per_dag: "16"
+    scheduler-parsing_processes: "2"
+    webserver-dag_orientation: "TB"
+    webserver-dag_default_view: "grid"
+    logging-logging_level: "INFO"
+  connections:
+    - id: gcp_conn
+      type: google_cloud_platform
+      description: Connection to GCP services
+      extra:
+        project: composer2-migration-project-dev
+        keyfile_json: ""
+    - id: postgres_db
+      type: postgres
+      description: Connection to development PostgreSQL database
+      host: composer2-migration-dev-db
+      port: 5432
+      login: airflow
+      password: ""
+      schema: airflow
+  variables:
+    ENV: dev
+    GCP_PROJECT: composer2-migration-project-dev
+    GCS_BUCKET: composer2-migration-dev-bucket
+    ALERT_EMAIL: airflow-alerts-dev@example.com
+  pools:
+    - name: default_pool
+      slots: 64
+      description: "Default pool for tasks that don't specify a pool"
+    - name: etl_pool
+      slots: 16
+      description: Dedicated pool for ETL workflow tasks
+    - name: data_sync_pool
+      slots: 12
+      description: Pool for data synchronization tasks
+    - name: reporting_pool
+      slots: 8
+      description: Pool for report generation tasks
+    - name: high_priority_pool
+      slots: 4
+      description: Reserved pool for critical tasks
+  dagConcurrency: 16
+  parallelism: 32
+  dagSchedulingInterval: 5m
+  loadExamples: true
+  defaultTimezone: UTC
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+    alertmanager:
+      enabled: true
+      config:
+        receivers:
+          - name: email-notifications
+            email_configs:
+              - to: airflow-alerts-dev@example.com
+                send_resolved: true
+        route:
+          receiver: email-notifications
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 4h
+    rules:
+      - name: DagFailures
+        rules:
+          - alert: DagFailure
+            expr: airflow_dag_run_status{status="failed"} > 0
+            for: 5m
+            labels:
+              severity: warning
+              environment: dev
+            annotations:
+              summary: Airflow DAG failure
+              description: 'DAG {{ $labels.dag_id }} has failed in the development environment'
+      - name: TaskDuration
+        rules:
+          - alert: LongRunningTask
+            expr: airflow_task_duration_seconds > 3600
+            for: 15m
+            labels:
+              severity: warning
+              environment: dev
+            annotations:
+              summary: Long running Airflow task
+              description: 'Task {{ $labels.task_id }} in DAG {{ $labels.dag_id }} has been running for over 1 hour'
+  grafana:
+    enabled: true
+    adminPassword: ""
+    persistence:
+      enabled: true
+      size: 5Gi
+    dashboards:
+      airflow:
+        composerOverview: true
+        dagPerformance: true
+        taskPerformance: true
+    datasources:
+      prometheus:
+        name: Prometheus
+        type: prometheus
+        url: http://prometheus-server
+        access: proxy
+
+# Storage configuration
+storage:
+  buckets:
+    dags: composer2-migration-dev-dags
+    data: composer2-migration-dev-data
+    logs: composer2-migration-dev-logs
+    backup: composer2-migration-dev-backup
+  bucketLocation: US
+  bucketClass: STANDARD
+  bucketVersioning: true
+  objectLifecycleDays: 30
+
+# Security configuration
+security:
+  serviceAccount: composer2-migration-dev-sa@composer2-migration-project-dev.iam.gserviceaccount.com
+  networkPolicies:
+    enabled: false
+    defaultDenyIngress: false
+  webServerAllowIpRanges:
+    - 0.0.0.0/0
+  enablePrivateEnvironment: true
+  enablePrivateEndpoint: false
+  cloudSqlRequireSsl: true
+  enableIap: true
+
+# Image configuration
+image:
+  repository: gcr.io/composer2-migration-project-dev/airflow-supplemental
+  tag: 2.2.5-dev
+  pullPolicy: Always
+
+initImage:
+  repository: gcr.io/composer2-migration-project-dev/airflow-init
+  tag: 2.2.5-dev
+  pullPolicy: Always
+
+# Resource allocation
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# Environment variables
+env:
+  - name: AIRFLOW_ENV
+    value: dev
+  - name: GCP_PROJECT
+    value: composer2-migration-project-dev
+  - name: LOG_LEVEL
+    value: DEBUG
+  - name: ENABLE_DEBUG
+    value: "true"
+
+# Command and initialization
+command: python -m airflow webserver
+initCommand: python /scripts/init_composer.py
+
+# Service account
+serviceAccount:
+  name: composer2-dev-sa
+  create: false
+
+# Persistence configuration
+persistence:
+  enabled: false
+
+# DAG synchronization configuration
+dagSync:
+  enabled: true
+  interval: 5m
+  onInit: true
+  source: gs://composer2-migration-dev-dags
+
+# Node configuration
+nodeSelector:
+  cloud.google.com/gke-nodepool: composer-pool
+
+# Tolerations
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: airflow
+    effect: NoSchedule
+
+# Affinity configuration
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: cloud.google.com/gke-nodepool
+              operator: In
+              values:
+                - composer-pool
+
+# Autoscaling configuration
+autoscaling:
+  enabled: false
+
+# Development-specific settings
+debug:
+  enabled: true
+  verbose: true
+  showConfig: true
+  localDevelopment: true
+
+# Testing configuration
+testing:
+  enabled: true
+  dagTests: true
+  unitTests: true
+  loadExampleDags: true
+
+# Logging configuration
+logging:
+  level: DEBUG
+  format: json
+  retention: 7d
+  handlers:
+    - console
+    - file
+
+# Development convenience features
+development:
+  hotReload: true
+  fastScheduler: true
+  skipDagParsing: false
+  debugWebserver: true
