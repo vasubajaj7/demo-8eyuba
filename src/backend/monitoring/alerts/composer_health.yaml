@@ -1,0 +1,159 @@
+displayName: Composer Environment Health Alert
+documentation:
+  content: |
+    # Composer Environment Health Alert
+
+    This alert policy monitors the health of Cloud Composer 2 environments running Airflow 2.X. It is designed to detect infrastructure and component issues that could impact workflow reliability and system availability.
+
+    ## Conditions
+    - Environment Not Healthy: Immediate alert when the overall environment health check fails
+    - Scheduler Not Running: Alert when the scheduler heartbeat is missing
+    - Worker Pod Evictions: Alert when worker pods are being evicted
+    - Web Server Unavailable: Alert when the Airflow web server becomes unavailable
+    - Database Connection Issues: Alert when database connectivity problems occur
+    - High CPU Utilization: Alert when CPU utilization exceeds 80%
+    - High Memory Utilization: Alert when memory utilization exceeds 85%
+
+    ## Notification Channels
+    - Email to operations team
+    - Slack alerts to environment-specific channels
+    - PagerDuty for critical alerts in production
+
+    ## Remediation
+    1. Check Cloud Composer Environment logs for specific error messages
+    2. Verify network connectivity and VPC configuration
+    3. Check GKE cluster health and scaling configuration
+    4. Examine Cloud SQL instance health and performance
+    5. Check resource allocations and consider scaling if utilization is high
+    6. Review Airflow configuration for potential issues
+    7. Reference the runbook for detailed recovery procedures
+  mimeType: text/markdown
+combiner: OR
+conditions:
+  - displayName: Environment Not Healthy
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/healthy" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_MEAN
+          crossSeriesReducer: REDUCE_MIN
+      comparison: COMPARISON_LT
+      thresholdValue: 1
+      duration: 60s
+      trigger:
+        count: 1
+    severity: SEVERITY_CRITICAL
+  - displayName: Scheduler Not Running
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/scheduler_heartbeat" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_SUM
+      comparison: COMPARISON_LT
+      thresholdValue: 1
+      duration: 300s
+      trigger:
+        count: 1
+    severity: SEVERITY_CRITICAL
+  - displayName: Worker Pod Evictions
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/worker/pod_eviction" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 300s
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+      trigger:
+        count: 1
+    severity: SEVERITY_WARNING
+  - displayName: Web Server Unavailable
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/web_server/health" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_MEAN
+          crossSeriesReducer: REDUCE_MIN
+      comparison: COMPARISON_LT
+      thresholdValue: 1
+      duration: 180s
+      trigger:
+        count: 1
+    severity: SEVERITY_CRITICAL
+  - displayName: Database Connection Issues
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/database_health" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_MEAN
+          crossSeriesReducer: REDUCE_MIN
+      comparison: COMPARISON_LT
+      thresholdValue: 1
+      duration: 120s
+      trigger:
+        count: 1
+    severity: SEVERITY_CRITICAL
+  - displayName: High CPU Utilization
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/cpu/utilization" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 300s
+          perSeriesAligner: ALIGN_PERCENTILE_95
+          crossSeriesReducer: REDUCE_MEAN
+          groupByFields:
+            - metadata.system_labels.component
+      comparison: COMPARISON_GT
+      thresholdValue: 0.8
+      duration: 600s
+      trigger:
+        count: 3
+    severity: SEVERITY_WARNING
+  - displayName: High Memory Utilization
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/memory/utilization" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 300s
+          perSeriesAligner: ALIGN_PERCENTILE_95
+          crossSeriesReducer: REDUCE_MEAN
+          groupByFields:
+            - metadata.system_labels.component
+      comparison: COMPARISON_GT
+      thresholdValue: 0.85
+      duration: 600s
+      trigger:
+        count: 3
+    severity: SEVERITY_WARNING
+notificationChannels:
+  - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+  - projects/${PROJECT_ID}/notificationChannels/${SLACK_CHANNEL_ID}
+  - projects/${PROJECT_ID}/notificationChannels/${PAGERDUTY_CHANNEL_ID}
+alertStrategy:
+  autoClose: 86400s
+  notificationRateLimit:
+    period: 3600s
+userLabels:
+  severity: critical
+  category: infrastructure
+  component: composer
+  environment: composer2
+  version: 2.x
+enabled: true
+environment_variables:
+  dev:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_DEV_CHANNEL_ID}
+    severity: WARNING
+  qa:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_QA_CHANNEL_ID}
+    severity: WARNING
+  prod:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_PROD_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${PAGERDUTY_CHANNEL_ID}
+    severity: CRITICAL
