@@ -1,0 +1,121 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/src/backend/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    allow:
+      dependency-type: "all"
+    ignore:
+      - dependency-name: "apache-airflow"
+        versions: [">=2.6.0"]
+    assignees:
+      - "airflow-maintainers"
+    reviewers:
+      - "airflow-security-team"
+      - "devops-team"
+    labels:
+      - "dependencies"
+      - "python"
+      - "airflow"
+    commit-message:
+      prefix: "deps(airflow):"
+      include: "scope"
+    open-pull-requests-limit: 10
+    versioning-strategy: "auto"
+
+  - package-ecosystem: "pip"
+    directory: "/src/test/config/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    allow:
+      dependency-type: "all"
+    labels:
+      - "dependencies"
+      - "python"
+      - "testing"
+    commit-message:
+      prefix: "deps(tests):"
+      include: "scope"
+    open-pull-requests-limit: 5
+    versioning-strategy: "auto"
+
+  - package-ecosystem: "npm"
+    directory: "/src/backend/"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "09:00"
+      timezone: "UTC"
+    allow:
+      dependency-type: "all"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "frontend"
+    reviewers:
+      - "frontend-team"
+    commit-message:
+      prefix: "deps(ui):"
+      include: "scope"
+    open-pull-requests-limit: 5
+    versioning-strategy: "auto"
+
+  - package-ecosystem: "docker"
+    directory: "/src/backend/"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "09:00"
+      timezone: "UTC"
+    labels:
+      - "dependencies"
+      - "docker"
+    reviewers:
+      - "devops-team"
+    commit-message:
+      prefix: "deps(docker):"
+      include: "scope"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "UTC"
+    labels:
+      - "dependencies"
+      - "ci-cd"
+    reviewers:
+      - "devops-team"
+    commit-message:
+      prefix: "deps(actions):"
+      include: "scope"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "terraform"
+    directory: "/src/backend/terraform/"
+    schedule:
+      interval: "monthly"
+      day: "first-monday"
+      time: "09:00"
+      timezone: "UTC"
+    labels:
+      - "dependencies"
+      - "infrastructure"
+      - "terraform"
+    reviewers:
+      - "infrastructure-team"
+      - "security-team"
+    commit-message:
+      prefix: "deps(terraform):"
+      include: "scope"
+    open-pull-requests-limit: 3
