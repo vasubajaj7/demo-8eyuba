@@ -1,0 +1,217 @@
+{
+  "google_cloud_default": {
+    "conn_id": "google_cloud_default",
+    "conn_type": "google_cloud_platform",
+    "description": "Default connection for interacting with Google Cloud Platform services",
+    "environments": {
+      "dev": {
+        "extra": {
+          "project": "airflow-migration-dev",
+          "keyfile_json": "{SECRET:gcp-keyfile-dev:latest}",
+          "scopes": "https://www.googleapis.com/auth/cloud-platform"
+        }
+      },
+      "qa": {
+        "extra": {
+          "project": "airflow-migration-qa",
+          "keyfile_json": "{SECRET:gcp-keyfile-qa:latest}",
+          "scopes": "https://www.googleapis.com/auth/cloud-platform"
+        }
+      },
+      "prod": {
+        "extra": {
+          "project": "airflow-migration-prod",
+          "keyfile_json": "{SECRET:gcp-keyfile-prod:latest}",
+          "scopes": "https://www.googleapis.com/auth/cloud-platform"
+        }
+      }
+    }
+  },
+  "postgres_default": {
+    "conn_id": "postgres_default",
+    "conn_type": "postgres",
+    "description": "Default PostgreSQL connection for database interactions in Cloud SQL or other PostgreSQL databases",
+    "environments": {
+      "dev": {
+        "host": "10.0.0.1",
+        "schema": "airflow",
+        "login": "airflow_user",
+        "port": 5432,
+        "password": "{SECRET:postgres-password-dev:latest}"
+      },
+      "qa": {
+        "host": "10.0.0.2",
+        "schema": "airflow",
+        "login": "airflow_user",
+        "port": 5432,
+        "password": "{SECRET:postgres-password-qa:latest}"
+      },
+      "prod": {
+        "host": "10.0.0.3",
+        "schema": "airflow",
+        "login": "airflow_user",
+        "port": 5432,
+        "password": "{SECRET:postgres-password-prod:latest}"
+      }
+    }
+  },
+  "bigquery_default": {
+    "conn_id": "bigquery_default",
+    "conn_type": "google_cloud_platform",
+    "description": "BigQuery connection for data warehousing operations",
+    "environments": {
+      "dev": {
+        "extra": {
+          "project": "airflow-migration-dev",
+          "dataset": "etl_data_dev",
+          "keyfile_json": "{SECRET:bigquery-keyfile-dev:latest}",
+          "scopes": "https://www.googleapis.com/auth/bigquery"
+        }
+      },
+      "qa": {
+        "extra": {
+          "project": "airflow-migration-qa",
+          "dataset": "etl_data_qa",
+          "keyfile_json": "{SECRET:bigquery-keyfile-qa:latest}",
+          "scopes": "https://www.googleapis.com/auth/bigquery"
+        }
+      },
+      "prod": {
+        "extra": {
+          "project": "airflow-migration-prod",
+          "dataset": "etl_data_prod",
+          "keyfile_json": "{SECRET:bigquery-keyfile-prod:latest}",
+          "scopes": "https://www.googleapis.com/auth/bigquery"
+        }
+      }
+    }
+  },
+  "gcs_default": {
+    "conn_id": "gcs_default",
+    "conn_type": "google_cloud_platform",
+    "description": "Google Cloud Storage connection for file operations",
+    "environments": {
+      "dev": {
+        "extra": {
+          "project": "airflow-migration-dev",
+          "bucket": "airflow-migration-dev-bucket",
+          "keyfile_json": "{SECRET:gcs-keyfile-dev:latest}",
+          "scopes": "https://www.googleapis.com/auth/devstorage.read_write"
+        }
+      },
+      "qa": {
+        "extra": {
+          "project": "airflow-migration-qa",
+          "bucket": "airflow-migration-qa-bucket",
+          "keyfile_json": "{SECRET:gcs-keyfile-qa:latest}",
+          "scopes": "https://www.googleapis.com/auth/devstorage.read_write"
+        }
+      },
+      "prod": {
+        "extra": {
+          "project": "airflow-migration-prod",
+          "bucket": "airflow-migration-prod-bucket",
+          "keyfile_json": "{SECRET:gcs-keyfile-prod:latest}",
+          "scopes": "https://www.googleapis.com/auth/devstorage.read_write"
+        }
+      }
+    }
+  },
+  "secretmanager_default": {
+    "conn_id": "secretmanager_default",
+    "conn_type": "google_cloud_platform",
+    "description": "Secret Manager connection for accessing secrets and credentials",
+    "environments": {
+      "dev": {
+        "extra": {
+          "project": "airflow-migration-dev",
+          "keyfile_json": "{SECRET:secretmanager-keyfile-dev:latest}",
+          "scopes": "https://www.googleapis.com/auth/cloud-platform"
+        }
+      },
+      "qa": {
+        "extra": {
+          "project": "airflow-migration-qa",
+          "keyfile_json": "{SECRET:secretmanager-keyfile-qa:latest}",
+          "scopes": "https://www.googleapis.com/auth/cloud-platform"
+        }
+      },
+      "prod": {
+        "extra": {
+          "project": "airflow-migration-prod",
+          "keyfile_json": "{SECRET:secretmanager-keyfile-prod:latest}",
+          "scopes": "https://www.googleapis.com/auth/cloud-platform"
+        }
+      }
+    }
+  },
+  "http_default": {
+    "conn_id": "http_default",
+    "conn_type": "http",
+    "description": "Default HTTP connection for API calls to external systems",
+    "environments": {
+      "dev": {
+        "host": "api-dev.example.com",
+        "schema": "https"
+      },
+      "qa": {
+        "host": "api-qa.example.com",
+        "schema": "https"
+      },
+      "prod": {
+        "host": "api.example.com",
+        "schema": "https"
+      }
+    }
+  },
+  "etl_source_db": {
+    "conn_id": "etl_source_db",
+    "conn_type": "postgres",
+    "description": "Database connection to ETL source system",
+    "environments": {
+      "dev": {
+        "host": "etl-db-dev.internal.example.com",
+        "schema": "etl_source",
+        "login": "etl_user",
+        "port": 5432,
+        "password": "{SECRET:etl-db-password-dev:latest}"
+      },
+      "qa": {
+        "host": "etl-db-qa.internal.example.com",
+        "schema": "etl_source",
+        "login": "etl_user",
+        "port": 5432,
+        "password": "{SECRET:etl-db-password-qa:latest}"
+      },
+      "prod": {
+        "host": "etl-db-prod.internal.example.com",
+        "schema": "etl_source",
+        "login": "etl_user",
+        "port": 5432,
+        "password": "{SECRET:etl-db-password-prod:latest}"
+      }
+    }
+  },
+  "redis_default": {
+    "conn_id": "redis_default",
+    "conn_type": "redis",
+    "description": "Redis connection for task queue and metadata cache",
+    "environments": {
+      "dev": {
+        "host": "redis-dev.internal.example.com",
+        "port": 6379,
+        "password": "{SECRET:redis-password-dev:latest}"
+      },
+      "qa": {
+        "host": "redis-qa.internal.example.com",
+        "port": 6379,
+        "password": "{SECRET:redis-password-qa:latest}"
+      },
+      "prod": {
+        "host": "redis-prod.internal.example.com",
+        "port": 6379,
+        "password": "{SECRET:redis-password-prod:latest}"
+      }
+    }
+  }
+}
