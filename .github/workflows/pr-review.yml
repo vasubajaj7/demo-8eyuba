@@ -1,0 +1,1250 @@
+name: Pull Request Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main, release/*, dev, development]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Pull request number to review'
+        required: true
+        type: number
+
+env:
+  AIRFLOW_HOME: ${{ github.workspace }}/airflow
+  AIRFLOW_VERSION: '2.0.0'
+  PYTHONPATH: ${{ github.workspace }}
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  security-events: write
+
+jobs:
+  pr_metadata:
+    name: Validate PR Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Check PR title follows conventional commits
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pattern = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z-]+\))?: .{1,100}$/;
+            const title = context.payload.pull_request ? context.payload.pull_request.title : 
+                         (await github.rest.pulls.get({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            pull_number: ${{ github.event.inputs.pr_number || 0 }}
+                          })).data.title;
+            
+            if (!pattern.test(title)) {
+              core.setFailed(`PR title "${title}" does not follow conventional commits format. 
+              Expected format: type(scope): description`);
+            } else {
+              console.log(`PR title "${title}" follows the conventional commits format.`);
+            }
+      
+      - name: Validate PR description against template
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const body = context.payload.pull_request ? context.payload.pull_request.body : 
+                       (await github.rest.pulls.get({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          pull_number: ${{ github.event.inputs.pr_number || 0 }}
+                        })).data.body;
+            
+            // Required sections in PR description
+            const requiredSections = [
+              '## Description',
+              '## Type of change',
+              '## Airflow 2.X Migration Impact',
+              '## How Has This Been Tested?',
+              '## Checklist'
+            ];
+            
+            const missingSections = requiredSections.filter(section => !body.includes(section));
+            
+            if (missingSections.length > 0) {
+              core.setFailed(`PR description is missing the following required sections: ${missingSections.join(', ')}`);
+            } else {
+              console.log('PR description contains all required sections.');
+            }
+            
+            // Check for migration checklist items
+            if (!body.includes('- [ ] Updated import paths for Airflow 2.X') || 
+                !body.includes('- [ ] Removed deprecated features') ||
+                !body.includes('- [ ] Tested with Airflow 2.X')) {
+              core.warning('PR might be missing important migration checklist items.');
+            }
+      
+      - name: Check PR labels
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const labels = context.payload.pull_request ? context.payload.pull_request.labels.map(l => l.name) : 
+                          (await github.rest.pulls.get({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            pull_number: ${{ github.event.inputs.pr_number || 0 }}
+                          })).data.labels.map(l => l.name);
+            
+            // Check if PR has at least one type label
+            const typeLabels = ['bug', 'enhancement', 'migration', 'documentation', 'refactor'];
+            const hasTypeLabel = typeLabels.some(label => labels.includes(label));
+            
+            if (!hasTypeLabel) {
+              core.warning('PR is missing a type label. Add one of: bug, enhancement, migration, documentation, refactor');
+            }
+            
+            // Migration PRs should have the migration label
+            const prTitle = context.payload.pull_request ? context.payload.pull_request.title : 
+                           (await github.rest.pulls.get({
+                              owner: context.repo.owner,
+                              repo: context.repo.repo,
+                              pull_number: ${{ github.event.inputs.pr_number || 0 }}
+                            })).data.title;
+            
+            if (prTitle.includes('migration') && !labels.includes('migration')) {
+              core.warning('PR title contains "migration" but the PR is missing the "migration" label.');
+            }
+      
+      - name: Check PR size
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const files = context.payload.pull_request ? context.payload.pull_request.changed_files : 
+                         (await github.rest.pulls.listFiles({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            pull_number: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
+                          })).data.length;
+            
+            console.log(`PR changes ${files} files.`);
+            
+            if (files > 20) {
+              core.warning(`Large PR detected with ${files} files changed. Consider breaking into smaller PRs if possible.`);
+            }
+      
+      - name: Generate PR metadata report
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr = context.payload.pull_request || 
+                     (await github.rest.pulls.get({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        pull_number: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
+                      })).data;
+            
+            const report = `
+            # PR Metadata Report
+            
+            - **PR Title**: ${pr.title}
+            - **Author**: @${pr.user.login}
+            - **Created**: ${new Date(pr.created_at).toLocaleString()}
+            - **Labels**: ${pr.labels.map(l => l.name).join(', ') || 'None'}
+            - **Files Changed**: ${pr.changed_files || 'Unknown'}
+            - **Additions**: ${pr.additions || 'Unknown'}
+            - **Deletions**: ${pr.deletions || 'Unknown'}
+            
+            ## Migration Impact Assessment
+            
+            Based on PR title and description, this PR appears to be ${pr.title.includes('migration') || (pr.body && pr.body.includes('migration')) ? '**related to**' : '**not directly related to**'} the Airflow 2.X migration.
+            
+            ## Next Steps
+            
+            1. Check test results for Airflow 2.X compatibility
+            2. Verify that PR follows the migration guidelines
+            3. Assign appropriate reviewers
+            `;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: report
+            });
+  
+  lint:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    needs: [pr_metadata]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Install linting dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install black==22.3.0 flake8==5.0.4 isort==5.10.1 pylint==2.15.0
+          pip install apache-airflow==${{ env.AIRFLOW_VERSION }}
+      
+      - name: Filter for changed Python files
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            python:
+              - '**/*.py'
+            dag:
+              - 'src/backend/dags/**/*.py'
+            operator:
+              - 'src/backend/plugins/operators/**/*.py'
+            hook:
+              - 'src/backend/plugins/hooks/**/*.py'
+            sensor:
+              - 'src/backend/plugins/sensors/**/*.py'
+      
+      - name: Run black
+        if: steps.filter.outputs.python == 'true'
+        run: |
+          black --check --line-length 100 .
+        continue-on-error: true
+      
+      - name: Run isort
+        if: steps.filter.outputs.python == 'true'
+        run: |
+          isort --check --profile black .
+        continue-on-error: true
+      
+      - name: Run pylint
+        if: steps.filter.outputs.python == 'true'
+        run: |
+          pylint --disable=C0103,C0111,C0302,C0330,R0903,R0913,W0511 \
+                 --extension-pkg-whitelist=airflow \
+                 --ignore=dist,build,venv \
+                 --good-names=i,j,k,e,x,y,z,ex,Run,_,id,df \
+                 --max-line-length=100 \
+                 $(git ls-files '*.py')
+        continue-on-error: true
+      
+      - name: Run flake8
+        if: steps.filter.outputs.python == 'true'
+        run: |
+          flake8 --max-line-length=100 --extend-ignore=E203,E501 --exclude=venv,dist,build .
+        continue-on-error: true
+      
+      - name: Post lint results
+        if: steps.filter.outputs.python == 'true'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr_number = ${{ github.event.pull_request.number || github.event.inputs.pr_number }};
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr_number,
+              body: `## Lint Results Summary
+
+              Linting checks have completed. Please review any warnings or errors.
+              
+              - Make sure your code follows [PEP 8](https://peps.python.org/pep-0008/) guidelines
+              - Ensure import statements are properly ordered
+              - Keep line length under 100 characters
+              - Remove any unused imports or variables
+              
+              For Airflow 2.X migration:
+              - Make sure to update import paths for new provider packages
+              - Remove deprecated parameters like \`provide_context\`
+              - Follow Airflow 2.X naming conventions
+              
+              Check the job logs for detailed information.`
+            });
+  
+  airflow2_compatibility:
+    name: Airflow 2.X Compatibility
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Install Airflow 2.X and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install apache-airflow==${{ env.AIRFLOW_VERSION }}
+          pip install apache-airflow-providers-google==2.0.0
+          pip install apache-airflow-providers-http==2.0.0
+          pip install apache-airflow-providers-postgres==2.0.0
+          
+          # Install other dependencies
+          pip install pytest pytest-cov pandas
+      
+      - name: Filter for changed DAG files
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            dag:
+              - 'src/backend/dags/**/*.py'
+            operator:
+              - 'src/backend/plugins/operators/**/*.py'
+            hook:
+              - 'src/backend/plugins/hooks/**/*.py'
+            sensor:
+              - 'src/backend/plugins/sensors/**/*.py'
+      
+      - name: Run validate_dags.py with Airflow 2.X compatibility checks
+        if: steps.filter.outputs.dag == 'true' || steps.filter.outputs.operator == 'true' || steps.filter.outputs.hook == 'true' || steps.filter.outputs.sensor == 'true'
+        run: |
+          mkdir -p ${{ env.AIRFLOW_HOME }}
+          mkdir -p reports
+          
+          # Create directories if they don't exist
+          mkdir -p src/backend/dags
+          
+          # Run validation script
+          python -m src.backend.scripts.validate_dags \
+            src/backend/dags \
+            -o reports/airflow2_compatibility_report.json \
+            -f json \
+            -l WARNING \
+            -v
+      
+      - name: Generate compatibility report
+        if: steps.filter.outputs.dag == 'true' || steps.filter.outputs.operator == 'true' || steps.filter.outputs.hook == 'true' || steps.filter.outputs.sensor == 'true'
+        run: |
+          python -c "
+          import json
+          import sys
+          
+          try:
+              with open('reports/airflow2_compatibility_report.json', 'r') as f:
+                  report = json.load(f)
+                  
+              error_count = report.get('summary', {}).get('error_count', 0)
+              warning_count = report.get('summary', {}).get('warning_count', 0)
+              
+              # Create a simplified report for the PR comment
+              summary = {
+                  'total_files': report.get('summary', {}).get('total_files', 0),
+                  'compatible_files': report.get('summary', {}).get('passed_files', 0),
+                  'incompatible_files': report.get('summary', {}).get('failed_files', 0),
+                  'error_count': error_count,
+                  'warning_count': warning_count,
+                  'most_common_issues': report.get('summary', {}).get('most_common_issues', [])[:5]
+              }
+              
+              with open('reports/compatibility_summary.json', 'w') as f:
+                  json.dump(summary, f)
+                  
+              # Exit with error if there are any errors in the report
+              if error_count > 0:
+                  print(f'Found {error_count} compatibility errors that need to be fixed.')
+                  sys.exit(1)
+              else:
+                  print('No critical Airflow 2.X compatibility issues found.')
+          except Exception as e:
+              print(f'Error processing compatibility report: {str(e)}')
+              sys.exit(1)
+          "
+        continue-on-error: true
+      
+      - name: Upload compatibility report
+        uses: actions/upload-artifact@v3
+        with:
+          name: airflow2-compatibility-report
+          path: reports/airflow2_compatibility_report.json
+      
+      - name: Post compatibility report as PR comment
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const pr_number = ${{ github.event.pull_request.number || github.event.inputs.pr_number }};
+            
+            try {
+              const summaryJson = fs.readFileSync('reports/compatibility_summary.json', 'utf8');
+              const summary = JSON.parse(summaryJson);
+              
+              let status = '✅ Compatible with Airflow 2.X';
+              if (summary.incompatible_files > 0) {
+                status = '❌ Incompatible with Airflow 2.X';
+              } else if (summary.warning_count > 0) {
+                status = '⚠️ Compatible with warnings';
+              }
+              
+              let commonIssues = '';
+              if (summary.most_common_issues && summary.most_common_issues.length > 0) {
+                commonIssues = `\n\n### Most Common Issues:\n`;
+                summary.most_common_issues.forEach(issue => {
+                  commonIssues += `- ${issue.issue} (Count: ${issue.count})\n`;
+                });
+              }
+              
+              const body = `## Airflow 2.X Compatibility Analysis
+              
+              **Status**: ${status}
+              
+              ### Summary
+              - Files analyzed: ${summary.total_files}
+              - Compatible files: ${summary.compatible_files}
+              - Incompatible files: ${summary.incompatible_files}
+              - Total issues: ${summary.error_count + summary.warning_count}
+                - Errors: ${summary.error_count}
+                - Warnings: ${summary.warning_count}
+              ${commonIssues}
+              
+              ### Recommendations
+              - Update import paths according to Airflow 2.X conventions
+              - Remove provide_context=True from PythonOperators
+              - Ensure callback functions accept a 'context' parameter
+              - Consider adopting TaskFlow API for Python functions
+              - Check connection types and install required provider packages
+              
+              For detailed information, see the full report in the workflow artifacts.`;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                body: body
+              });
+            } catch (error) {
+              console.error('Error creating compatibility report comment:', error);
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                body: `## Airflow 2.X Compatibility Analysis
+                
+                ⚠️ Error generating compatibility report. Please check the workflow logs for details.`
+              });
+            }
+  
+  security_scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [pr_metadata]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: python
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+      
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Install security scanning tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety detect-secrets
+      
+      - name: Run dependency vulnerability check
+        run: |
+          pip freeze > requirements-frozen.txt
+          safety check -r requirements-frozen.txt --output json > security-report.json || true
+      
+      - name: Check for hardcoded secrets
+        run: |
+          detect-secrets scan --all-files > secrets-report.json
+      
+      - name: Scan for insecure patterns
+        run: |
+          bandit -r src -f json -o bandit-report.json || true
+      
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-reports
+          path: |
+            security-report.json
+            secrets-report.json
+            bandit-report.json
+      
+      - name: Post security scan results
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const pr_number = ${{ github.event.pull_request.number || github.event.inputs.pr_number }};
+            
+            try {
+              // Process safety report
+              let vulnerabilities = [];
+              try {
+                const safetyReport = JSON.parse(fs.readFileSync('security-report.json', 'utf8'));
+                if (safetyReport.vulnerabilities) {
+                  vulnerabilities = safetyReport.vulnerabilities.slice(0, 5); // Get first 5
+                }
+              } catch (e) {
+                console.log('No safety vulnerabilities found or error parsing report.');
+              }
+              
+              // Process bandit report
+              let banditIssues = [];
+              try {
+                const banditReport = JSON.parse(fs.readFileSync('bandit-report.json', 'utf8'));
+                if (banditReport.results) {
+                  banditIssues = banditReport.results.slice(0, 5); // Get first 5
+                }
+              } catch (e) {
+                console.log('No bandit issues found or error parsing report.');
+              }
+              
+              // Create comment
+              let securityReport = `## Security Scan Results
+              
+              ### Dependency Vulnerabilities
+              `;
+              
+              if (vulnerabilities.length > 0) {
+                securityReport += `⚠️ Found ${vulnerabilities.length} potential vulnerabilities in dependencies:\n\n`;
+                vulnerabilities.forEach(v => {
+                  securityReport += `- **${v.package_name}**: ${v.vulnerability}\n`;
+                });
+              } else {
+                securityReport += `✅ No vulnerabilities found in dependencies.\n`;
+              }
+              
+              securityReport += `\n### Code Security Issues\n`;
+              
+              if (banditIssues.length > 0) {
+                securityReport += `⚠️ Found ${banditIssues.length} potential security issues in code:\n\n`;
+                banditIssues.forEach(issue => {
+                  securityReport += `- **${issue.issue_text}** in \`${issue.filename}\` (line ${issue.line_number})\n`;
+                });
+              } else {
+                securityReport += `✅ No security issues found in code.\n`;
+              }
+              
+              securityReport += `\nFor detailed information, see the security reports in the workflow artifacts.`;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                body: securityReport
+              });
+            } catch (error) {
+              console.error('Error creating security report comment:', error);
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                body: `## Security Scan Results
+                
+                ⚠️ Error generating security report. Please check the workflow logs for details.`
+              });
+            }
+  
+  unit_tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: [airflow2_compatibility]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install apache-airflow==${{ env.AIRFLOW_VERSION }}
+          pip install apache-airflow-providers-google==2.0.0
+          pip install apache-airflow-providers-http==2.0.0
+          pip install apache-airflow-providers-postgres==2.0.0
+          
+          pip install pytest pytest-cov pytest-xdist pytest-timeout mock
+      
+      - name: Filter for affected tests
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            dag:
+              - 'src/backend/dags/**/*.py'
+              - 'src/test/dags/**/*.py'
+            operator:
+              - 'src/backend/plugins/operators/**/*.py'
+              - 'src/test/plugins/operators/**/*.py'
+            hook:
+              - 'src/backend/plugins/hooks/**/*.py'
+              - 'src/test/plugins/hooks/**/*.py'
+            sensor:
+              - 'src/backend/plugins/sensors/**/*.py'
+              - 'src/test/plugins/sensors/**/*.py'
+            utils:
+              - 'src/backend/dags/utils/**/*.py'
+              - 'src/test/dags/utils/**/*.py'
+      
+      - name: Set up Airflow test environment
+        run: |
+          mkdir -p ${{ env.AIRFLOW_HOME }}/dags
+          mkdir -p ${{ env.AIRFLOW_HOME }}/plugins
+          
+          # Copy DAGs and plugins to Airflow home for testing
+          if [ -d "src/backend/dags" ]; then
+            cp -r src/backend/dags/* ${{ env.AIRFLOW_HOME }}/dags/
+          fi
+          
+          if [ -d "src/backend/plugins" ]; then
+            cp -r src/backend/plugins/* ${{ env.AIRFLOW_HOME }}/plugins/
+          fi
+          
+          # Create Airflow config file
+          cat > ${{ env.AIRFLOW_HOME }}/airflow.cfg << EOF
+          [core]
+          dags_folder = ${{ env.AIRFLOW_HOME }}/dags
+          plugins_folder = ${{ env.AIRFLOW_HOME }}/plugins
+          executor = SequentialExecutor
+          load_examples = False
+          
+          [database]
+          sql_alchemy_conn = sqlite:///${{ env.AIRFLOW_HOME }}/airflow.db
+          
+          [webserver]
+          web_server_port = 8080
+          
+          [api]
+          auth_backend = airflow.api.auth.backend.default
+          EOF
+      
+      - name: Run pytest for affected components
+        run: |
+          test_dirs=""
+          
+          # Build list of test directories based on changed files
+          if [ "${{ steps.filter.outputs.dag }}" == "true" ]; then
+            test_dirs="${test_dirs} src/test/dags"
+          fi
+          
+          if [ "${{ steps.filter.outputs.operator }}" == "true" ]; then
+            test_dirs="${test_dirs} src/test/plugins/operators"
+          fi
+          
+          if [ "${{ steps.filter.outputs.hook }}" == "true" ]; then
+            test_dirs="${test_dirs} src/test/plugins/hooks"
+          fi
+          
+          if [ "${{ steps.filter.outputs.sensor }}" == "true" ]; then
+            test_dirs="${test_dirs} src/test/plugins/sensors"
+          fi
+          
+          if [ "${{ steps.filter.outputs.utils }}" == "true" ]; then
+            test_dirs="${test_dirs} src/test/dags/utils"
+          fi
+          
+          # If no specific changes detected, run all tests
+          if [ -z "$test_dirs" ]; then
+            test_dirs="src/test"
+          fi
+          
+          # Run tests
+          PYTHONPATH=${{ env.PYTHONPATH }} pytest $test_dirs \
+            --verbose \
+            --cov=src/backend \
+            --cov-report=term \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:coverage_html \
+            --junitxml=test-results.xml
+        continue-on-error: true
+      
+      - name: Upload test reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-reports
+          path: |
+            coverage.xml
+            coverage_html/
+            test-results.xml
+      
+      - name: Post test summary
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const xml2js = require('xml2js');
+            const parser = new xml2js.Parser({ explicitArray: false });
+            
+            const pr_number = ${{ github.event.pull_request.number || github.event.inputs.pr_number }};
+            
+            try {
+              // Simple check if file exists
+              if (!fs.existsSync('test-results.xml')) {
+                throw new Error('Test results file not found');
+              }
+              
+              const data = fs.readFileSync('test-results.xml', 'utf8');
+              parser.parseString(data, async (err, result) => {
+                if (err) {
+                  throw new Error(`Failed to parse test results: ${err}`);
+                }
+                
+                const testsuite = result.testsuites.testsuite;
+                const tests = parseInt(testsuite.$.tests) || 0;
+                const failures = parseInt(testsuite.$.failures) || 0;
+                const errors = parseInt(testsuite.$.errors) || 0;
+                const skipped = parseInt(testsuite.$.skipped) || 0;
+                const time = parseFloat(testsuite.$.time) || 0;
+                
+                const status = failures > 0 || errors > 0 ? '❌ Tests Failed' : '✅ Tests Passed';
+                
+                let testReport = `## Unit Test Results
+                
+                **Status**: ${status}
+                
+                ### Summary
+                - Total tests: ${tests}
+                - Passed: ${tests - failures - errors - skipped}
+                - Failed: ${failures}
+                - Errors: ${errors}
+                - Skipped: ${skipped}
+                - Duration: ${time.toFixed(2)} seconds
+                
+                `;
+                
+                // Add details of failing tests if any
+                if (failures > 0 || errors > 0) {
+                  testReport += `### Failed Tests\n`;
+                  
+                  if (Array.isArray(testsuite.testcase)) {
+                    const failedTests = testsuite.testcase.filter(tc => tc.failure || tc.error);
+                    failedTests.slice(0, 10).forEach(tc => {
+                      const className = tc.$.classname;
+                      const name = tc.$.name;
+                      const message = tc.failure ? tc.failure.$.message : tc.error ? tc.error.$.message : 'Unknown error';
+                      
+                      testReport += `- **${className}.${name}**: ${message}\n`;
+                    });
+                    
+                    if (failedTests.length > 10) {
+                      testReport += `\n... and ${failedTests.length - 10} more failed tests.\n`;
+                    }
+                  }
+                }
+                
+                testReport += `\nFor detailed information, see the test reports in the workflow artifacts.`;
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr_number,
+                  body: testReport
+                });
+              });
+            } catch (error) {
+              console.error('Error creating test report comment:', error);
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                body: `## Unit Test Results
+                
+                ⚠️ Error generating test report. Please check the workflow logs for details.`
+              });
+            }
+  
+  migration_tests:
+    name: Migration Tests
+    runs-on: ubuntu-latest
+    needs: [unit_tests]
+    if: "contains(github.event.pull_request.labels.*.name, 'migration')"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Create Python virtual environments
+        run: |
+          # Create virtual environments for both Airflow versions
+          python -m venv airflow1_env
+          python -m venv airflow2_env
+          
+          # Install Airflow 1.10.15 in first environment
+          source airflow1_env/bin/activate
+          pip install --upgrade pip
+          pip install apache-airflow==1.10.15
+          pip install pytest pytest-cov mock
+          deactivate
+          
+          # Install Airflow 2.X in second environment
+          source airflow2_env/bin/activate
+          pip install --upgrade pip
+          pip install apache-airflow==${{ env.AIRFLOW_VERSION }}
+          pip install apache-airflow-providers-google==2.0.0
+          pip install apache-airflow-providers-http==2.0.0
+          pip install apache-airflow-providers-postgres==2.0.0
+          pip install pytest pytest-cov mock
+          deactivate
+      
+      - name: Run Airflow 1.10.15 tests
+        run: |
+          source airflow1_env/bin/activate
+          
+          # Set up Airflow 1.10.15 environment
+          export AIRFLOW_HOME=airflow1_home
+          mkdir -p $AIRFLOW_HOME/dags
+          mkdir -p $AIRFLOW_HOME/plugins
+          
+          # Run migration-specific tests for Airflow 1.x
+          PYTHONPATH=${{ env.PYTHONPATH }} pytest src/test/migration_tests \
+            -k "test_airflow1" \
+            --verbose \
+            --junitxml=airflow1-test-results.xml
+          
+          deactivate
+      
+      - name: Run Airflow 2.X tests
+        run: |
+          source airflow2_env/bin/activate
+          
+          # Set up Airflow 2.X environment
+          export AIRFLOW_HOME=airflow2_home
+          mkdir -p $AIRFLOW_HOME/dags
+          mkdir -p $AIRFLOW_HOME/plugins
+          
+          # Run migration-specific tests for Airflow 2.x
+          PYTHONPATH=${{ env.PYTHONPATH }} pytest src/test/migration_tests \
+            -k "test_airflow2" \
+            --verbose \
+            --junitxml=airflow2-test-results.xml
+          
+          deactivate
+      
+      - name: Compare test results
+        run: |
+          python -c "
+          import xml.etree.ElementTree as ET
+          import sys
+          
+          try:
+              # Parse test result files
+              airflow1_tree = ET.parse('airflow1-test-results.xml')
+              airflow2_tree = ET.parse('airflow2-test-results.xml')
+              
+              airflow1_root = airflow1_tree.getroot()
+              airflow2_root = airflow2_tree.getroot()
+              
+              airflow1_failures = int(airflow1_root.attrib.get('failures', '0'))
+              airflow1_errors = int(airflow1_root.attrib.get('errors', '0'))
+              airflow1_tests = int(airflow1_root.attrib.get('tests', '0'))
+              
+              airflow2_failures = int(airflow2_root.attrib.get('failures', '0'))
+              airflow2_errors = int(airflow2_root.attrib.get('errors', '0'))
+              airflow2_tests = int(airflow2_root.attrib.get('tests', '0'))
+              
+              # Write comparison results to file
+              with open('migration-test-comparison.txt', 'w') as f:
+                  f.write('Migration Test Comparison\\n')
+                  f.write('========================\\n\\n')
+                  f.write(f'Airflow 1.10.15 Results:\\n')
+                  f.write(f'  - Tests: {airflow1_tests}\\n')
+                  f.write(f'  - Failures: {airflow1_failures}\\n')
+                  f.write(f'  - Errors: {airflow1_errors}\\n\\n')
+                  f.write(f'Airflow 2.X Results:\\n')
+                  f.write(f'  - Tests: {airflow2_tests}\\n')
+                  f.write(f'  - Failures: {airflow2_failures}\\n')
+                  f.write(f'  - Errors: {airflow2_errors}\\n\\n')
+                  
+                  # Determine pass/fail
+                  if airflow1_failures > 0 or airflow1_errors > 0:
+                      f.write('Airflow 1.10.15 tests have failures or errors!\\n')
+                  
+                  if airflow2_failures > 0 or airflow2_errors > 0:
+                      f.write('Airflow 2.X tests have failures or errors!\\n')
+                  
+                  # Overall status
+                  if airflow2_failures == 0 and airflow2_errors == 0:
+                      f.write('\\nMigration tests PASSED for Airflow 2.X\\n')
+                  else:
+                      f.write('\\nMigration tests FAILED for Airflow 2.X\\n')
+              
+              # Exit with error if Airflow 2.X tests failed
+              if airflow2_failures > 0 or airflow2_errors > 0:
+                  sys.exit(1)
+          
+          except Exception as e:
+              print(f'Error comparing test results: {str(e)}')
+              sys.exit(1)
+          "
+        continue-on-error: true
+      
+      - name: Upload migration test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: migration-test-results
+          path: |
+            airflow1-test-results.xml
+            airflow2-test-results.xml
+            migration-test-comparison.txt
+      
+      - name: Post migration test report
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const pr_number = ${{ github.event.pull_request.number || github.event.inputs.pr_number }};
+            
+            try {
+              // Read comparison file
+              const comparisonText = fs.readFileSync('migration-test-comparison.txt', 'utf8');
+              
+              // Determine status
+              let status = '✅ Migration Tests Passed';
+              if (comparisonText.includes('Migration tests FAILED')) {
+                status = '❌ Migration Tests Failed';
+              }
+              
+              const migrationReport = `## Airflow Migration Test Results
+              
+              **Status**: ${status}
+              
+              \`\`\`
+              ${comparisonText}
+              \`\`\`
+              
+              For detailed information, see the migration test results in the workflow artifacts.`;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                body: migrationReport
+              });
+            } catch (error) {
+              console.error('Error creating migration test report comment:', error);
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                body: `## Airflow Migration Test Results
+                
+                ⚠️ Error generating migration test report. Please check the workflow logs for details.`
+              });
+            }
+  
+  check_required_reviewers:
+    name: Required Reviewers Check
+    runs-on: ubuntu-latest
+    needs: [pr_metadata]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Filter changed files by path
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            dags:
+              - 'src/backend/dags/**'
+            plugins:
+              - 'src/backend/plugins/**'
+            config:
+              - 'src/backend/config/**'
+            workflows:
+              - '.github/workflows/**'
+            migration:
+              - 'src/backend/migrations/**'
+            scripts:
+              - 'src/backend/scripts/**'
+            infrastructure:
+              - 'infrastructure/**'
+              - 'src/backend/terraform/**'
+            ci_cd:
+              - 'src/backend/ci-cd/**'
+            tests:
+              - 'src/test/**'
+      
+      - name: Check required reviewers based on CODEOWNERS
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr_number = ${{ github.event.pull_request.number || github.event.inputs.pr_number }};
+            
+            // Get CODEOWNERS file content
+            const codeowners = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: '.github/CODEOWNERS'
+            });
+            
+            const content = Buffer.from(codeowners.data.content, 'base64').toString();
+            
+            // Parse CODEOWNERS
+            const lines = content.split('\n').filter(line => line.trim() && !line.startsWith('#'));
+            const owners = {};
+            
+            lines.forEach(line => {
+              const parts = line.trim().split(/\s+/);
+              if (parts.length >= 2) {
+                const pattern = parts[0];
+                const reviewers = parts.slice(1);
+                owners[pattern] = reviewers;
+              }
+            });
+            
+            // Determine required reviewers based on changed files
+            const requiredReviewers = new Set();
+            const filterOutputs = {
+              dags: ${{ steps.filter.outputs.dags }},
+              plugins: ${{ steps.filter.outputs.plugins }},
+              config: ${{ steps.filter.outputs.config }},
+              workflows: ${{ steps.filter.outputs.workflows }},
+              migration: ${{ steps.filter.outputs.migration }},
+              scripts: ${{ steps.filter.outputs.scripts }},
+              infrastructure: ${{ steps.filter.outputs.infrastructure }},
+              ci_cd: ${{ steps.filter.outputs.ci_cd }},
+              tests: ${{ steps.filter.outputs.tests }}
+            };
+            
+            // Map file patterns to possible match
+            const patternMapping = {
+              'dags': ['src/backend/dags/*'],
+              'plugins': ['src/backend/plugins/*'],
+              'config': ['src/backend/config/*'],
+              'workflows': ['.github/workflows/*'],
+              'migration': ['src/backend/migrations/*'],
+              'scripts': ['src/backend/scripts/*'],
+              'infrastructure': ['infrastructure/*', 'src/backend/terraform/*'],
+              'ci_cd': ['src/backend/ci-cd/*'],
+              'tests': ['src/test/*']
+            };
+            
+            // Build list of required reviewers based on changed files
+            for (const [category, isChanged] of Object.entries(filterOutputs)) {
+              if (isChanged === 'true') {
+                const patterns = patternMapping[category] || [];
+                patterns.forEach(pattern => {
+                  for (const [ownerPattern, ownerList] of Object.entries(owners)) {
+                    // Very simple pattern matching - could be improved
+                    if (pattern.startsWith(ownerPattern) || 
+                        ownerPattern.includes('*') && pattern.startsWith(ownerPattern.replace('*', ''))) {
+                      ownerList.forEach(reviewer => requiredReviewers.add(reviewer));
+                    }
+                  }
+                });
+              }
+            }
+            
+            // Add default reviewers
+            if (owners['*']) {
+              owners['*'].forEach(reviewer => requiredReviewers.add(reviewer));
+            }
+            
+            // Get current PR reviewers
+            const { data: currentReviewers } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr_number
+            });
+            
+            const approvedReviewers = new Set();
+            const pendingReviewers = new Set();
+            
+            currentReviewers.forEach(review => {
+              if (review.state === 'APPROVED') {
+                approvedReviewers.add(review.user.login);
+              } else if (review.state === 'PENDING') {
+                pendingReviewers.add(review.user.login);
+              }
+            });
+            
+            // Format reviewers for display
+            const requiredReviewersList = Array.from(requiredReviewers);
+            const missingReviewers = requiredReviewersList.filter(
+              reviewer => !approvedReviewers.has(reviewer.replace('@', ''))
+            );
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr_number,
+              body: `## Required Reviewers Check
+              
+              Based on the files changed in this PR, the following reviewers are required:
+              
+              ${requiredReviewersList.join(', ')}
+              
+              ### Current Status
+              - Approved: ${Array.from(approvedReviewers).join(', ') || 'None'}
+              - Missing approvals from: ${missingReviewers.join(', ') || 'None'}
+              
+              Please make sure to request reviews from the required reviewers.`
+            });
+  
+  approval_summary:
+    name: Approval Status
+    runs-on: ubuntu-latest
+    needs: [lint, airflow2_compatibility, security_scan, unit_tests, check_required_reviewers]
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Get workflow results
+        id: workflow_results
+        run: |
+          echo "::set-output name=lint::${{ needs.lint.result }}"
+          echo "::set-output name=airflow2_compatibility::${{ needs.airflow2_compatibility.result }}"
+          echo "::set-output name=security_scan::${{ needs.security_scan.result }}"
+          echo "::set-output name=unit_tests::${{ needs.unit_tests.result }}"
+          echo "::set-output name=check_required_reviewers::${{ needs.check_required_reviewers.result }}"
+          
+          if [[ "${{ contains(github.event.pull_request.labels.*.name, 'migration') }}" == "true" ]]; then
+            echo "::set-output name=migration_tests::${{ needs.migration_tests.result }}"
+          else
+            echo "::set-output name=migration_tests::skipped"
+          fi
+      
+      - name: Collect approval workflow configuration
+        run: |
+          # Read approval workflow stages and configuration
+          if [ -f "src/backend/ci-cd/approval-workflow.json" ]; then
+            cat src/backend/ci-cd/approval-workflow.json | jq '.stages' > stages.json
+          else
+            echo '[]' > stages.json
+          fi
+      
+      - name: Generate approval summary
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const pr_number = ${{ github.event.pull_request.number || github.event.inputs.pr_number }};
+            
+            // Read workflow results
+            const results = {
+              lint: '${{ steps.workflow_results.outputs.lint }}',
+              airflow2_compatibility: '${{ steps.workflow_results.outputs.airflow2_compatibility }}',
+              security_scan: '${{ steps.workflow_results.outputs.security_scan }}',
+              unit_tests: '${{ steps.workflow_results.outputs.unit_tests }}',
+              check_required_reviewers: '${{ steps.workflow_results.outputs.check_required_reviewers }}',
+              migration_tests: '${{ steps.workflow_results.outputs.migration_tests }}'
+            };
+            
+            // Parse approval workflow stages
+            let stages = [];
+            try {
+              stages = JSON.parse(fs.readFileSync('stages.json', 'utf8'));
+            } catch (error) {
+              console.error('Error reading approval workflow stages:', error);
+            }
+            
+            // Determine overall status
+            const failedJobs = Object.entries(results)
+              .filter(([job, result]) => result === 'failure')
+              .map(([job]) => job);
+              
+            const isPassing = failedJobs.length === 0;
+            
+            // Create a summary of job results
+            let jobSummary = '';
+            for (const [job, result] of Object.entries(results)) {
+              const emoji = result === 'success' ? '✅' : 
+                         result === 'failure' ? '❌' : 
+                         result === 'skipped' ? '⏭️' : '⚠️';
+              jobSummary += `- ${emoji} **${job}**: ${result}\n`;
+            }
+            
+            // Create next steps based on current stage (default to codeReview)
+            let currentStage = 'codeReview';
+            let nextSteps = '';
+            
+            if (stages.length > 0) {
+              const stageInfo = stages.find(s => s.name === currentStage) || stages[0];
+              
+              nextSteps = `### Next Steps in "${stageInfo.description || currentStage}" Stage\n\n`;
+              
+              if (stageInfo.requiredActions && stageInfo.requiredActions.length > 0) {
+                nextSteps += "Required actions:\n";
+                stageInfo.requiredActions.forEach(action => {
+                  nextSteps += `- [ ] ${action.replace(/_/g, ' ')}\n`;
+                });
+              }
+              
+              if (stageInfo.nextStage) {
+                nextSteps += `\nOnce all checks pass and required reviews are approved, this PR will move to the "${stageInfo.nextStage}" stage.\n`;
+              }
+            } else {
+              nextSteps = `### Next Steps\n\n`;
+              nextSteps += `- [ ] Get code reviews and approvals\n`;
+              nextSteps += `- [ ] Fix any issues identified by the automated checks\n`;
+              nextSteps += `- [ ] Once approved, merge the PR\n`;
+            }
+            
+            const approvalSummary = `## Pull Request Approval Summary
+            
+            ### Overall Status
+            ${isPassing ? '✅ **All checks are passing**' : `❌ **${failedJobs.length} checks are failing**`}
+            
+            ### Job Results
+            ${jobSummary}
+            
+            ${nextSteps}
+            
+            ### Migration Impact
+            ${results.migration_tests !== 'skipped' ? 
+              (results.migration_tests === 'success' ? 
+                '✅ Migration tests have passed. This PR is compatible with Airflow 2.X.' : 
+                '❌ Migration tests have failed. This PR is not yet compatible with Airflow 2.X.') : 
+              '⚠️ No migration tests were run. If this PR affects Airflow code, consider adding the "migration" label.'
+            }
+            
+            ### Approval Process
+            This PR follows the [multi-stage approval process](src/backend/ci-cd/approval-workflow.json) for the Airflow migration project.
+            
+            Current stage: **${currentStage}**`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr_number,
+              body: approvalSummary
+            });
+            
+            // Update PR status based on overall result
+            if (!isPassing) {
+              core.setFailed(`${failedJobs.length} checks are failing: ${failedJobs.join(', ')}`);
+            }
