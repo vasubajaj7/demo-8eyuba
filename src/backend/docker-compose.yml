@@ -1,0 +1,183 @@
+version: '3.8'
+
+services:
+  # Airflow webserver service providing UI and REST API
+  webserver:
+    description: Airflow webserver service providing UI and REST API
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: custom-airflow:2.5.1
+    command: airflow webserver
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./logs:/opt/airflow/logs
+      - ./airflow.cfg:/opt/airflow/airflow.cfg
+      - ./webserver_config.py:/opt/airflow/webserver_config.py
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__WEBSERVER__BASE_URL=http://localhost:8080
+      - AIRFLOW__WEBSERVER__WEB_SERVER_PORT=8080
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+      - AIRFLOW__WEBSERVER__RBAC=True
+      - AIRFLOW__WEBSERVER__AUTHENTICATE=True
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: "30s"
+      timeout: "10s"
+      retries: 3
+    restart: always
+
+  # Airflow scheduler service for task scheduling
+  scheduler:
+    description: Airflow scheduler service for task scheduling
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: custom-airflow:2.5.1
+    command: airflow scheduler
+    depends_on:
+      - postgres
+      - redis
+      - webserver
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./logs:/opt/airflow/logs
+      - ./airflow.cfg:/opt/airflow/airflow.cfg
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+      - AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC=10
+      - AIRFLOW__SCHEDULER__PARSING_PROCESSES=2
+      - AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL=30
+    restart: always
+
+  # Airflow Celery worker for task execution
+  worker:
+    description: Airflow Celery worker for task execution
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: custom-airflow:2.5.1
+    command: airflow celery worker
+    depends_on:
+      - postgres
+      - redis
+      - scheduler
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./logs:/opt/airflow/logs
+      - ./airflow.cfg:/opt/airflow/airflow.cfg
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+      - AIRFLOW__CELERY__WORKER_CONCURRENCY=8
+      - AIRFLOW__CELERY__WORKER_PREFETCH_MULTIPLIER=1
+      - AIRFLOW__CELERY__TASK_ACKS_LATE=True
+    restart: always
+
+  # Celery flower for monitoring worker tasks
+  flower:
+    description: Celery flower for monitoring worker tasks
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: custom-airflow:2.5.1
+    command: airflow celery flower
+    depends_on:
+      - redis
+      - worker
+    ports:
+      - "5555:5555"
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    restart: always
+
+  # PostgreSQL database for Airflow metadata
+  postgres:
+    description: PostgreSQL database for Airflow metadata
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: "30s"
+      timeout: "10s"
+      retries: 3
+    restart: always
+
+  # Redis for Celery broker and result backend
+  redis:
+    description: Redis for Celery broker and result backend
+    image: redis:6.x
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: "30s"
+      timeout: "10s"
+      retries: 3
+    restart: always
+
+  # One-time initialization service for Airflow database
+  init:
+    description: One-time initialization service for Airflow database
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: custom-airflow:2.5.1
+    depends_on:
+      - postgres
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./logs:/opt/airflow/logs
+      - ./airflow.cfg:/opt/airflow/airflow.cfg
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    command: bash -c 'airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com'
+
+volumes:
+  postgres-db-volume:
+    description: Persistent volume for PostgreSQL data
+
+networks:
+  default:
+    name: airflow-network
+    description: Default network for all Airflow services
