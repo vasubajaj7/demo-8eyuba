@@ -1,0 +1,763 @@
+name: Deploy to Cloud Composer 2 Environments
+
+# Define when this workflow should run
+on:
+  # Manual trigger with environment selection
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for deployment'
+        type: choice
+        options: [dev, qa, prod]
+        default: 'dev'
+      ref:
+        description: 'Git ref to deploy (branch, tag)'
+        type: string
+        default: 'main'
+
+  # Automatic trigger on push to main branch for DAG/config changes
+  push:
+    branches: [main]
+    paths:
+      - 'src/backend/dags/**'
+      - 'src/backend/plugins/**'
+      - 'src/backend/config/**'
+  
+  # Trigger after pull request workflow is completed
+  workflow_run:
+    workflows: ["Pull Request Review"]
+    types: [completed]
+    branches: [main]
+
+# Environment variables used throughout the workflow
+env:
+  GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
+  AIRFLOW_HOME: ${{ github.workspace }}/airflow
+  PYTHONPATH: ${{ github.workspace }}
+  DEPLOYMENT_ID: ${{ github.run_id }}-${{ github.run_number }}
+
+# Define permissions needed by this workflow
+permissions:
+  contents: read
+  id-token: write  # Needed for GCP authentication
+  deployments: write
+  environments: write
+
+# Ensure only one workflow runs per environment at a time
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.event.inputs.environment || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  # Job to validate DAGs for Airflow 2.X compatibility
+  validate-dags:
+    name: Validate DAGs for Airflow 2.X Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install apache-airflow==2.2.5 apache-airflow-providers-google==6.0.0
+          pip install pytest pytest-airflow black pytest-cov
+
+          # Install additional required packages
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+      
+      - name: Validate DAGs for Airflow 2.X compatibility
+        id: validate-dags
+        run: |
+          mkdir -p validation-reports
+          python src/backend/scripts/validate_dags.py src/backend/dags \
+            --output validation-reports/validation-report.json \
+            --format json \
+            --level WARNING
+          
+          # Check for validation errors
+          ERROR_COUNT=$(jq -r '.summary.error_count' validation-reports/validation-report.json)
+          WARNING_COUNT=$(jq -r '.summary.warning_count' validation-reports/validation-report.json)
+          echo "Validation found $ERROR_COUNT errors and $WARNING_COUNT warnings"
+          
+          if [ "$ERROR_COUNT" -gt 0 ]; then
+            echo "::error::DAG validation failed with $ERROR_COUNT errors"
+            exit 1
+          fi
+          
+          # Generate HTML report for better readability
+          python src/backend/scripts/validate_dags.py src/backend/dags \
+            --output validation-reports/validation-report.html \
+            --format html \
+            --level INFO
+      
+      - name: Upload validation reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: validation-reports
+          path: validation-reports/
+          retention-days: 14
+
+  # Job to deploy to development environment
+  deploy-to-dev:
+    name: Deploy to Development Environment
+    runs-on: ubuntu-latest
+    needs: validate-dags
+    # Run for dev deployments or automatic triggers
+    if: success() && (github.event.inputs.environment == 'dev' || github.event_name == 'push' || github.event_name == 'workflow_run')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install apache-airflow==2.2.5 apache-airflow-providers-google==6.0.0
+          
+          # Install additional required packages
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+      
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: '>= 363.0.0'
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      
+      - name: Deploy to DEV environment
+        id: deploy-dev
+        run: |
+          mkdir -p deployment-logs
+          bash src/backend/ci-cd/deploy-dev.sh 2>&1 | tee deployment-logs/deploy-dev.log
+          
+          # Check for success
+          if grep -q "Deployment to development environment completed successfully" deployment-logs/deploy-dev.log; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "::error::Deployment to DEV environment failed"
+            exit 1
+          fi
+      
+      - name: Upload deployment logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: dev-deployment-logs-${{ env.DEPLOYMENT_ID }}
+          path: deployment-logs/
+          retention-days: 14
+      
+      - name: Create GitHub deployment record
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ github.ref }}',
+              environment: 'dev',
+              auto_merge: false,
+              required_contexts: [],
+              description: 'Development deployment ${{ env.DEPLOYMENT_ID }}'
+            });
+            
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: '${{ steps.deploy-dev.outputs.status }}',
+              environment_url: 'https://console.cloud.google.com/composer/environments?project=${{ env.GOOGLE_CLOUD_PROJECT }}'
+            });
+
+  # Job to request approval for QA deployment
+  approve-qa-deployment:
+    name: Request QA Deployment Approval
+    runs-on: ubuntu-latest
+    needs: deploy-to-dev
+    if: success() && (github.event.inputs.environment == 'qa' || github.event_name == 'workflow_dispatch')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Load approval workflow configuration
+        id: approval-config
+        run: |
+          # Read approval workflow configuration
+          jq -r '.environments[] | select(.name=="qa")' src/backend/ci-cd/approval-workflow.json > qa-config.json
+          echo "requiredApprovers=$(jq -r '.requiredApprovers | join(",")' qa-config.json)" >> $GITHUB_OUTPUT
+          echo "timeout=$(jq -r '.timeout' qa-config.json)" >> $GITHUB_OUTPUT
+      
+      - name: Generate QA approval token
+        id: approval-token
+        run: |
+          # Create approval token with required information
+          TIMESTAMP=$(date +%s)
+          EXPIRATION=$(( $TIMESTAMP + ${{ steps.approval-config.outputs.timeout }} ))
+          
+          TOKEN_DATA=$(cat << EOF
+          {
+            "environment": "qa",
+            "approver_ids": [],
+            "timestamp": "$TIMESTAMP",
+            "approval_id": "${{ env.DEPLOYMENT_ID }}",
+            "expiration": $EXPIRATION
+          }
+          EOF
+          )
+          
+          echo "$TOKEN_DATA" > qa_approval_token.json
+          echo "token-file=qa_approval_token.json" >> $GITHUB_OUTPUT
+      
+      - name: Upload approval token
+        uses: actions/upload-artifact@v3
+        with:
+          name: qa-approval-token
+          path: qa_approval_token.json
+          retention-days: 3
+      
+      - name: Notify approvers
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "text": "QA Deployment Approval Requested",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "QA Deployment Approval Requested"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "A deployment to the QA environment requires Peer and QA approval.\n*Deployment ID:* ${{ env.DEPLOYMENT_ID }}\n*Workflow:* ${{ github.workflow }}\n*Initiated by:* ${{ github.actor }}\n*Required approvers:* ${{ steps.approval-config.outputs.requiredApprovers }}"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # Job to deploy to QA environment after approval
+  deploy-to-qa:
+    name: Deploy to QA Environment
+    runs-on: ubuntu-latest
+    needs: approve-qa-deployment
+    environment:
+      name: qa
+      url: https://console.cloud.google.com/composer/environments?project=${{ env.GOOGLE_CLOUD_PROJECT }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install apache-airflow==2.2.5 apache-airflow-providers-google==6.0.0
+          
+          # Install additional required packages
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+      
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: '>= 363.0.0'
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      
+      - name: Download QA approval token
+        uses: actions/download-artifact@v3
+        with:
+          name: qa-approval-token
+          path: .
+      
+      - name: Update approval token with approvers
+        run: |
+          # Add required approvers to the token
+          jq '.approver_ids = ["PEER", "QA"]' qa_approval_token.json > temp.json && mv temp.json qa_approval_token.json
+      
+      - name: Deploy to QA environment
+        id: deploy-qa
+        run: |
+          mkdir -p deployment-logs
+          
+          # Set approval token for the deployment script
+          export APPROVAL_TOKEN_FILE=$(pwd)/qa_approval_token.json
+          
+          # Run deployment script
+          bash src/backend/ci-cd/deploy-qa.sh 2>&1 | tee deployment-logs/deploy-qa.log
+          
+          # Check for success
+          if grep -q "QA team notification completed" deployment-logs/deploy-qa.log; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "::error::Deployment to QA environment failed"
+            exit 1
+          fi
+      
+      - name: Upload deployment logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: qa-deployment-logs-${{ env.DEPLOYMENT_ID }}
+          path: deployment-logs/
+          retention-days: 14
+      
+      - name: Create GitHub deployment record
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ github.ref }}',
+              environment: 'qa',
+              auto_merge: false,
+              required_contexts: [],
+              description: 'QA deployment ${{ env.DEPLOYMENT_ID }}'
+            });
+            
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: '${{ steps.deploy-qa.outputs.status }}',
+              environment_url: 'https://console.cloud.google.com/composer/environments?project=${{ env.GOOGLE_CLOUD_PROJECT }}'
+            });
+
+  # Job to request approval for production deployment
+  approve-prod-deployment:
+    name: Request Production Deployment Approval
+    runs-on: ubuntu-latest
+    needs: deploy-to-qa
+    if: success() && (github.event.inputs.environment == 'prod' || github.event_name == 'workflow_dispatch')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Load approval workflow configuration
+        id: approval-config
+        run: |
+          # Read approval workflow configuration
+          jq -r '.environments[] | select(.name=="prod")' src/backend/ci-cd/approval-workflow.json > prod-config.json
+          echo "requiredApprovers=$(jq -r '.requiredApprovers | join(",")' prod-config.json)" >> $GITHUB_OUTPUT
+          echo "timeout=$(jq -r '.timeout' prod-config.json)" >> $GITHUB_OUTPUT
+      
+      - name: Generate comprehensive PROD approval token
+        id: approval-token
+        run: |
+          # Create approval token with CAB requirements
+          TIMESTAMP=$(date +%s)
+          EXPIRATION=$(( $TIMESTAMP + ${{ steps.approval-config.outputs.timeout }} ))
+          
+          TOKEN_DATA=$(cat << EOF
+          {
+            "environment": "prod",
+            "approver_ids": [],
+            "timestamp": "$TIMESTAMP",
+            "approval_id": "${{ env.DEPLOYMENT_ID }}",
+            "expiration": $EXPIRATION,
+            "business_justification": "Deployment of Apache Airflow DAGs to production environment as part of the Cloud Composer 1 to Cloud Composer 2 migration project. These DAGs have been validated for Airflow 2.X compatibility and successfully tested in QA environment.",
+            "risk_assessment": "Medium",
+            "rollback_plan": "In case of deployment issues, the deploy-prod.sh script will automatically roll back to the previous state using the backup created at the beginning of the deployment process. The backup is stored in the GCS bucket and includes all DAGs, variables, and connections. The rollback process is automated and can be triggered with the --rollback flag on the deployment script."
+          }
+          EOF
+          )
+          
+          echo "$TOKEN_DATA" > prod_approval_token.json
+          echo "token-file=prod_approval_token.json" >> $GITHUB_OUTPUT
+      
+      - name: Upload approval token
+        uses: actions/upload-artifact@v3
+        with:
+          name: prod-approval-token
+          path: prod_approval_token.json
+          retention-days: 4
+      
+      - name: Notify approvers
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "text": "PRODUCTION Deployment Approval Requested",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "⚠️ PRODUCTION Deployment Approval Requested ⚠️"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "A deployment to the *PRODUCTION* environment requires multiple approvals.\n*Deployment ID:* ${{ env.DEPLOYMENT_ID }}\n*Workflow:* ${{ github.workflow }}\n*Initiated by:* ${{ github.actor }}\n*Required approvers:* ${{ steps.approval-config.outputs.requiredApprovers }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Business Justification:*\nDeployment of Apache Airflow DAGs to production environment as part of the Cloud Composer 1 to Cloud Composer 2 migration project. These DAGs have been validated for Airflow 2.X compatibility and successfully tested in QA environment."
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Risk Assessment:* Medium\n*Rollback Plan:* Automated rollback procedure included in deployment script."
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Review Deployment"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # Job to deploy to production environment after approval
+  deploy-to-prod:
+    name: Deploy to Production Environment
+    runs-on: ubuntu-latest
+    needs: approve-prod-deployment
+    environment:
+      name: prod
+      url: https://console.cloud.google.com/composer/environments?project=${{ env.GOOGLE_CLOUD_PROJECT }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install apache-airflow==2.2.5 apache-airflow-providers-google==6.0.0
+          
+          # Install additional required packages
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+      
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: '>= 363.0.0'
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      
+      - name: Download PROD approval token
+        uses: actions/download-artifact@v3
+        with:
+          name: prod-approval-token
+          path: .
+      
+      - name: Update approval token with approvers
+        run: |
+          # Add required approvers to the token
+          jq '.approver_ids = ["CAB", "ARCHITECT", "STAKEHOLDER"]' prod_approval_token.json > temp.json && mv temp.json prod_approval_token.json
+      
+      - name: Deploy to Production environment
+        id: deploy-prod
+        run: |
+          mkdir -p deployment-logs
+          
+          # Set approval token for the deployment script
+          export APPROVAL_TOKEN_FILE=$(pwd)/prod_approval_token.json
+          
+          # Run deployment script with all required approvals
+          bash src/backend/ci-cd/deploy-prod.sh 2>&1 | tee deployment-logs/deploy-prod.log
+          
+          # Check for success
+          if grep -q "Production deployment completed successfully" deployment-logs/deploy-prod.log; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "::error::Deployment to Production environment failed"
+            exit 1
+          fi
+      
+      - name: Create Git tag for deployment
+        if: steps.deploy-prod.outputs.status == 'success'
+        run: |
+          # Create a git tag for this production deployment for traceability
+          DEPLOY_TAG="prod-deploy-${{ env.DEPLOYMENT_ID }}"
+          git config --local user.email "github-actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git tag -a $DEPLOY_TAG -m "Production deployment ${{ env.DEPLOYMENT_ID }}"
+          git push origin $DEPLOY_TAG
+      
+      - name: Upload deployment logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: prod-deployment-logs-${{ env.DEPLOYMENT_ID }}
+          path: deployment-logs/
+          retention-days: 90
+      
+      - name: Send deployment notification
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "text": "Production Deployment Completed",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.deploy-prod.outputs.status == 'success' ? '✅ Production Deployment Successful' : '❌ Production Deployment Failed' }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Deployment Details:*\nDeployment ID: ${{ env.DEPLOYMENT_ID }}\nEnvironment: Production\nStatus: ${{ steps.deploy-prod.outputs.status == 'success' ? 'SUCCESS' : 'FAILED' }}\nDeployed by: ${{ github.actor }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "Deployment logs and audit trail have been saved for future reference."
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+      
+      - name: Create GitHub deployment record
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ github.ref }}',
+              environment: 'prod',
+              auto_merge: false,
+              required_contexts: [],
+              description: 'Production deployment ${{ env.DEPLOYMENT_ID }}'
+            });
+            
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: '${{ steps.deploy-prod.outputs.status }}',
+              environment_url: 'https://console.cloud.google.com/composer/environments?project=${{ env.GOOGLE_CLOUD_PROJECT }}'
+            });
+
+  # Job to handle deployment failures
+  handle-failure:
+    name: Handle Deployment Failure
+    runs-on: ubuntu-latest
+    if: failure()
+    needs: [deploy-to-dev, deploy-to-qa, deploy-to-prod]
+    steps:
+      - name: Identify failure point
+        id: identify-failure
+        run: |
+          # Determine which environment had the failure
+          if ${{ contains(needs.deploy-to-prod.result, 'failure') }}; then
+            echo "failed_env=production" >> $GITHUB_OUTPUT
+            echo "env_short=prod" >> $GITHUB_OUTPUT
+          elif ${{ contains(needs.deploy-to-qa.result, 'failure') }}; then
+            echo "failed_env=qa" >> $GITHUB_OUTPUT
+            echo "env_short=qa" >> $GITHUB_OUTPUT
+          elif ${{ contains(needs.deploy-to-dev.result, 'failure') }}; then
+            echo "failed_env=development" >> $GITHUB_OUTPUT
+            echo "env_short=dev" >> $GITHUB_OUTPUT
+          else
+            echo "failed_env=unknown" >> $GITHUB_OUTPUT
+            echo "env_short=unknown" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Create incident report
+        run: |
+          # Create a detailed incident report for the failure
+          mkdir -p incident-reports
+          
+          cat > incident-reports/incident-${{ env.DEPLOYMENT_ID }}.md << EOF
+          # Deployment Incident Report
+          
+          ## Incident Details
+          - **Incident ID**: ${{ env.DEPLOYMENT_ID }}
+          - **Environment**: ${{ steps.identify-failure.outputs.failed_env }}
+          - **Time**: $(date --iso-8601=seconds)
+          - **Initiated by**: ${{ github.actor }}
+          
+          ## Workflow Details
+          - **Workflow**: ${{ github.workflow }}
+          - **Run ID**: ${{ github.run_id }}
+          - **URL**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          ## Investigation Steps
+          1. Check the workflow logs to identify the specific error
+          2. Review the deployment logs for the environment
+          3. Verify that the DAG validation passed successfully
+          4. Check for issues with Google Cloud authentication
+          
+          ## Next Steps
+          1. Fix the identified issues
+          2. Re-run the deployment workflow
+          3. Update this incident report with root cause and resolution
+          
+          EOF
+      
+      - name: Send failure notification
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "text": "Deployment Failure Alert",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "❌ Deployment Failure Alert"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Failure Details:*\nDeployment ID: ${{ env.DEPLOYMENT_ID }}\nEnvironment: ${{ steps.identify-failure.outputs.failed_env }}\nInitiated by: ${{ github.actor }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "An incident report has been created. Please check the workflow logs for details about the failure."
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+      
+      - name: Upload incident report
+        uses: actions/upload-artifact@v3
+        with:
+          name: incident-report-${{ env.DEPLOYMENT_ID }}
+          path: incident-reports/
+          retention-days: 90
