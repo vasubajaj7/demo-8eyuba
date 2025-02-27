@@ -1,0 +1,509 @@
+{
+  "displayName": "Task Performance Dashboard",
+  "gridLayout": {
+    "columns": 12,
+    "widgets": [
+      {
+        "title": "Task Execution Duration",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/duration\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.task_id",
+                      "metadata.system_labels.dag_id"
+                    ]
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "{{metadata.system_labels.dag_id}}/{{metadata.system_labels.task_id}}"
+              }
+            }
+          ],
+          "yAxis": {
+            "label": "Duration (seconds)",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 600,
+              "label": "Standard Task Threshold",
+              "color": "YELLOW",
+              "targetAxis": "Y1"
+            },
+            {
+              "value": 900,
+              "label": "Critical Task Threshold",
+              "color": "RED",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 0,
+          "column": 0
+        }
+      },
+      {
+        "title": "Task Success Rate",
+        "pieChart": {
+          "chartType": "PIE",
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/succeeded_count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_SUM",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "resource.label.environment_name"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/failed_count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_SUM",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "resource.label.environment_name"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 0,
+          "column": 6
+        }
+      },
+      {
+        "title": "Task Queue Time",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/queue_time\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.task_id",
+                      "metadata.system_labels.dag_id"
+                    ]
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "{{metadata.system_labels.dag_id}}/{{metadata.system_labels.task_id}}"
+              }
+            }
+          ],
+          "yAxis": {
+            "label": "Queue Time (seconds)",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 300,
+              "label": "Queue Time Threshold",
+              "color": "RED",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 4,
+          "column": 0
+        }
+      },
+      {
+        "title": "Task State by Type",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/state_count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metadata.system_labels.state"
+                    ]
+                  }
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "legendTemplate": "{{metadata.system_labels.state}}"
+              }
+            }
+          ],
+          "yAxis": {
+            "label": "Tasks per interval",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 8,
+          "column": 0
+        }
+      },
+      {
+        "title": "Top 10 Slowest Tasks",
+        "tableChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/duration\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.task_id",
+                      "metadata.system_labels.dag_id"
+                    ]
+                  },
+                  "pickTimeSeriesFilter": {
+                    "rankingMethod": "METHOD_MAX",
+                    "numTimeSeries": 10
+                  }
+                }
+              }
+            }
+          ],
+          "columnSettings": [
+            {
+              "column": "metadata.system_labels.dag_id",
+              "displayName": "DAG ID"
+            },
+            {
+              "column": "metadata.system_labels.task_id",
+              "displayName": "Task ID"
+            },
+            {
+              "column": "value",
+              "displayName": "Duration (seconds)"
+            }
+          ]
+        },
+        "width": 6,
+        "height": 4,
+        "placement": {
+          "row": 8,
+          "column": 6
+        }
+      },
+      {
+        "title": "Task Retry Counts",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/retry_count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.task_id",
+                      "metadata.system_labels.dag_id"
+                    ]
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "{{metadata.system_labels.dag_id}}/{{metadata.system_labels.task_id}}"
+              }
+            }
+          ],
+          "yAxis": {
+            "label": "Retry Count",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 3,
+              "label": "High Retry Count",
+              "color": "RED",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 12,
+          "column": 0
+        }
+      },
+      {
+        "title": "Task Resource Utilization",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/worker/cpu/utilization\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.task_id",
+                      "metadata.system_labels.dag_id"
+                    ]
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "CPU - {{metadata.system_labels.dag_id}}/{{metadata.system_labels.task_id}}"
+              }
+            },
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/worker/memory/utilization\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.task_id",
+                      "metadata.system_labels.dag_id"
+                    ]
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "Memory - {{metadata.system_labels.dag_id}}/{{metadata.system_labels.task_id}}"
+              }
+            }
+          ],
+          "yAxis": {
+            "label": "Utilization (%)",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 80,
+              "label": "High Utilization",
+              "color": "RED",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 16,
+          "column": 0
+        }
+      },
+      {
+        "title": "Failed Tasks",
+        "tableChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/failed_count\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metadata.system_labels.task_id",
+                      "metadata.system_labels.dag_id"
+                    ]
+                  },
+                  "pickTimeSeriesFilter": {
+                    "rankingMethod": "METHOD_MAX",
+                    "numTimeSeries": 10
+                  }
+                }
+              }
+            }
+          ],
+          "columnSettings": [
+            {
+              "column": "metadata.system_labels.dag_id",
+              "displayName": "DAG ID"
+            },
+            {
+              "column": "metadata.system_labels.task_id",
+              "displayName": "Task ID"
+            },
+            {
+              "column": "value",
+              "displayName": "Failure Rate"
+            }
+          ]
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 20,
+          "column": 0
+        }
+      },
+      {
+        "title": "Task Performance Comparison: Airflow 1.X vs 2.X",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/migration/performance_ratio\" resource.type=\"cloud_composer_environment\" metadata.system_labels.metric_name=\"task_execution_time\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.task_type"
+                    ]
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "{{metadata.system_labels.task_type}} Improvement Ratio"
+              }
+            }
+          ],
+          "yAxis": {
+            "label": "Improvement Ratio (2.X:1.X)",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 1,
+              "label": "Baseline",
+              "color": "YELLOW",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 24,
+          "column": 0
+        }
+      },
+      {
+        "title": "Task Success Rate by Operator Type",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilterRatio": {
+                  "numerator": {
+                    "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/succeeded_count\" resource.type=\"cloud_composer_environment\"",
+                    "aggregation": {
+                      "perSeriesAligner": "ALIGN_DELTA",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "groupByFields": [
+                        "metadata.system_labels.operator_type"
+                      ]
+                    }
+                  },
+                  "denominator": {
+                    "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/count\" resource.type=\"cloud_composer_environment\"",
+                    "aggregation": {
+                      "perSeriesAligner": "ALIGN_DELTA",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "groupByFields": [
+                        "metadata.system_labels.operator_type"
+                      ]
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "{{metadata.system_labels.operator_type}}"
+              }
+            }
+          ],
+          "yAxis": {
+            "label": "Success Rate",
+            "scale": "LINEAR"
+          },
+          "thresholds": [
+            {
+              "value": 0.99,
+              "label": "Target 99%",
+              "color": "GREEN",
+              "targetAxis": "Y1"
+            }
+          ]
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 28,
+          "column": 0
+        }
+      },
+      {
+        "title": "Task Performance Stability",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"composer.googleapis.com/environment/dag/task/duration_variance\" resource.type=\"cloud_composer_environment\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metadata.system_labels.operator_type"
+                    ]
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "{{metadata.system_labels.operator_type}} Variance"
+              }
+            }
+          ],
+          "yAxis": {
+            "label": "Variance (seconds²)",
+            "scale": "LINEAR"
+          }
+        },
+        "width": 12,
+        "height": 4,
+        "placement": {
+          "row": 32,
+          "column": 0
+        }
+      }
+    ]
+  },
+  "etag": "",
+  "labels": {
+    "environment": "composer2",
+    "component": "tasks",
+    "category": "performance",
+    "version": "2.x"
+  }
+}
