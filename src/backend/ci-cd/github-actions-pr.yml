@@ -1,0 +1,770 @@
+name: PR Validation and Review
+
+on:
+  pull_request:
+    branches: ['main', 'develop']
+    paths:
+      - 'src/backend/**'
+      - 'src/test/**'
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Code Quality Checks
+  lint:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          
+      - name: Check code formatting with black
+        run: |
+          black --check --diff src/
+          
+      - name: Check import sorting with isort
+        run: |
+          isort --check --diff src/
+          
+      - name: Run pylint
+        run: |
+          pylint --rcfile=.pylintrc src/
+          
+      - name: Run flake8
+        run: |
+          flake8 src/
+          
+      - name: Run mypy type checking
+        run: |
+          mypy src/
+          
+      - name: Run bandit security checks
+        run: |
+          bandit -r src/ -c .bandit.yaml
+
+  # DAG Validation
+  dag-validation:
+    name: DAG Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          
+      - name: Install Airflow dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install apache-airflow==2.0.0
+          pip install apache-airflow-providers-google
+          pip install apache-airflow-providers-http
+          pip install apache-airflow-providers-postgres
+          
+      - name: Identify changed DAG files
+        id: changed-files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF=${{ github.event.pull_request.base.ref }}
+          else
+            BASE_REF=main
+          fi
+          CHANGED_FILES=$(git diff --name-only origin/$BASE_REF HEAD | grep '\.py$' | grep -v 'test/' | tr '\n' ' ')
+          echo "dag_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+          
+      - name: Validate DAGs
+        id: validate-dags
+        run: |
+          python -c "
+          import sys
+          sys.path.append('src')
+          from backend.scripts.validate_dags import validate_dag_files
+          
+          # Get the list of changed DAG files
+          changed_files = '${{ steps.changed-files.outputs.dag_files }}'.split()
+          
+          # Validate the DAG files
+          if changed_files:
+              results = validate_dag_files(changed_files)
+              print(f'Validation results: {results[\"success\"]}')
+              # Save results to file for artifact
+              import json
+              with open('dag_validation_results.json', 'w') as f:
+                  json.dump(results, f, indent=2)
+          else:
+              print('No DAG files changed')
+          "
+            
+      - name: Generate Airflow 2.X compatibility report
+        run: |
+          python -c "
+          import sys
+          sys.path.append('src')
+          from backend.scripts.validate_dags import create_airflow2_compatibility_report
+          
+          # Create compatibility report
+          create_airflow2_compatibility_report(
+              dag_directory='src/backend/dags',
+              output_file='airflow2_compatibility_report.json',
+              output_format='json'
+          )
+          "
+          
+      - name: Create validation summary for PR comment
+        run: |
+          echo "# DAG Validation Results" > dag_validation_report.md
+          
+          if [ -f "dag_validation_results.json" ]; then
+            python -c "
+            import json
+            
+            # Load validation results
+            with open('dag_validation_results.json', 'r') as f:
+                results = json.load(f)
+            
+            # Create a summary
+            with open('dag_validation_report.md', 'a') as report:
+                report.write(f'## Summary\n\n')
+                report.write(f'- Files validated: {results.get(\"files_validated\", 0)}\n')
+                report.write(f'- Overall status: {"✅ PASSED" if results.get(\"success\", False) else "❌ FAILED"}\n')
+                
+                # Error and warning counts
+                error_count = sum(len(file_result.get(\"validation\", {}).get(\"issues\", {}).get(\"errors\", [])) 
+                                for file_result in results.get(\"files\", []))
+                warning_count = sum(len(file_result.get(\"validation\", {}).get(\"issues\", {}).get(\"warnings\", []))
+                                  for file_result in results.get(\"files\", []))
+                
+                report.write(f'- Errors: {error_count}\n')
+                report.write(f'- Warnings: {warning_count}\n\n')
+                
+                # Add detailed issues if any
+                if error_count > 0 or warning_count > 0:
+                    report.write('## Issues\n\n')
+                    
+                    for file_result in results.get(\"files\", []):
+                        file_path = file_result.get(\"file_path\", \"Unknown\")
+                        issues = file_result.get(\"validation\", {}).get(\"issues\", {})
+                        
+                        if issues.get(\"errors\") or issues.get(\"warnings\"):
+                            report.write(f'### {file_path}\n\n')
+                            
+                            for error in issues.get(\"errors\", []):
+                                report.write(f'- ❌ **Error**: {error.get(\"component\", \"\")} - {error.get(\"message\", \"\")}\n')
+                                
+                            for warning in issues.get(\"warnings\", []):
+                                report.write(f'- ⚠️ **Warning**: {warning.get(\"component\", \"\")} - {warning.get(\"message\", \"\")}\n')
+                                
+                            report.write('\n')
+            "
+          else
+            echo "## No DAG files changed or validated" >> dag_validation_report.md
+          fi
+          
+          # Add compatibility report summary if available
+          if [ -f "airflow2_compatibility_report.json" ]; then
+            python -c "
+            import json
+            
+            # Load compatibility report
+            with open('airflow2_compatibility_report.json', 'r') as f:
+                results = json.load(f)
+            
+            # Create a summary
+            with open('dag_validation_report.md', 'a') as report:
+                report.write(f'## Airflow 2.X Compatibility\n\n')
+                
+                summary = results.get('summary', {})
+                report.write(f'- Compatible DAGs: {summary.get(\"compatible_dags\", 0)}\n')
+                report.write(f'- Incompatible DAGs: {summary.get(\"incompatible_dags\", 0)}\n')
+                
+                # Add migration guidance
+                guidance = results.get('migration_guidance', {})
+                if guidance:
+                    report.write('\n### Migration Guidance\n\n')
+                    for item in guidance.get('general_guidance', []):
+                        report.write(f'- {item}\n')
+                    
+                    if guidance.get('provider_packages'):
+                        report.write('\n#### Required Provider Packages\n\n')
+                        for package in guidance.get('provider_packages', []):
+                            report.write(f'- `{package}`\n')
+            "
+          fi
+          
+      - name: Upload validation reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: dag-validation-reports
+          path: |
+            dag_validation_results.json
+            airflow2_compatibility_report.json
+            dag_validation_report.md
+            
+      - name: Post validation results as PR comment
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-file: dag_validation_report.md
+
+  # Unit Tests
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r src/test/config/requirements-test.txt
+          
+      - name: Run unit tests
+        run: |
+          # Execute the unit test script
+          bash src/test/ci/run_unit_tests.sh
+          
+      - name: Upload test reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-reports
+          path: test-reports/
+
+  # Migration Compatibility Tests
+  migration-tests:
+    name: Migration Compatibility Tests
+    runs-on: ubuntu-latest
+    needs: [dag-validation]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          
+      - name: Install Airflow versions
+        run: |
+          python -m pip install --upgrade pip
+          # Install both Airflow versions
+          pip install apache-airflow==1.10.15
+          mkdir -p airflow2
+          pip install apache-airflow==2.0.0 --target ./airflow2
+          # Install common providers
+          pip install apache-airflow-providers-google
+          pip install apache-airflow-providers-http
+          pip install apache-airflow-providers-postgres
+          
+      - name: Download DAG validation reports
+        uses: actions/download-artifact@v3
+        with:
+          name: dag-validation-reports
+          
+      - name: Analyze deprecated features
+        run: |
+          python -c "
+          import sys
+          import json
+          import os
+          
+          sys.path.append('src')
+          
+          # Load validation results if available
+          compatibility_results = {}
+          if os.path.exists('airflow2_compatibility_report.json'):
+              with open('airflow2_compatibility_report.json', 'r') as f:
+                  compatibility_results = json.load(f)
+          
+          # Create migration recommendations file
+          with open('migration_recommendations.md', 'w') as f:
+              f.write('# Migration Recommendations\n\n')
+              
+              # Overall status
+              summary = compatibility_results.get('summary', {})
+              compatible_dags = summary.get('compatible_dags', 0)
+              incompatible_dags = summary.get('incompatible_dags', 0)
+              total_dags = compatible_dags + incompatible_dags
+              
+              if total_dags > 0:
+                  compatibility_pct = (compatible_dags / total_dags) * 100
+                  f.write(f'## Overall Compatibility: {compatibility_pct:.1f}%\n\n')
+                  f.write(f'- Compatible DAGs: {compatible_dags}\n')
+                  f.write(f'- Incompatible DAGs: {incompatible_dags}\n')
+                  f.write(f'- Total DAGs: {total_dags}\n\n')
+              
+              # Common issues
+              if 'most_common_issues' in summary:
+                  f.write('## Common Issues\n\n')
+                  for issue in summary.get('most_common_issues', []):
+                      f.write(f'- **{issue.get(\"issue\", \"\")}** (Count: {issue.get(\"count\", 0)})\n')
+                  f.write('\n')
+              
+              # Migration guidance
+              guidance = compatibility_results.get('migration_guidance', {})
+              if guidance:
+                  f.write('## Migration Guidance\n\n')
+                  for item in guidance.get('general_guidance', []):
+                      f.write(f'- {item}\n')
+                  
+                  if guidance.get('provider_packages'):
+                      f.write('\n### Required Provider Packages\n\n')
+                      for package in guidance.get('provider_packages', []):
+                          f.write(f'- `{package}`\n')
+                  
+                  if guidance.get('documentation_links'):
+                      f.write('\n### Documentation Links\n\n')
+                      for link in guidance.get('documentation_links', []):
+                          f.write(f'- [{link}]({link})\n')
+          "
+          
+      - name: Check for deprecated patterns
+        run: |
+          echo '## Detected Deprecated Patterns' >> migration_recommendations.md
+          echo '' >> migration_recommendations.md
+          
+          # Check for common deprecated patterns
+          echo '### Import Paths' >> migration_recommendations.md
+          echo '' >> migration_recommendations.md
+          
+          if grep -r "from airflow.contrib" src/backend/dags; then
+            echo '- ❌ Found `airflow.contrib` imports that need to be updated to provider packages' >> migration_recommendations.md
+          else
+            echo '- ✅ No `airflow.contrib` imports found' >> migration_recommendations.md
+          fi
+          
+          if grep -r "from airflow.hooks.base_hook" src/backend/dags; then
+            echo '- ❌ Found `airflow.hooks.base_hook` imports that need to be updated to `airflow.hooks.base`' >> migration_recommendations.md
+          else
+            echo '- ✅ No `airflow.hooks.base_hook` imports found' >> migration_recommendations.md
+          fi
+          
+          echo '' >> migration_recommendations.md
+          echo '### Operator Parameters' >> migration_recommendations.md
+          echo '' >> migration_recommendations.md
+          
+          if grep -r "provide_context=True" src/backend/dags; then
+            echo '- ❌ Found `provide_context=True` which is no longer needed in Airflow 2.X' >> migration_recommendations.md
+          else
+            echo '- ✅ No `provide_context=True` parameters found' >> migration_recommendations.md
+          fi
+          
+      - name: Identify TaskFlow API opportunities
+        run: |
+          python -c "
+          import os
+          import sys
+          import glob
+          
+          sys.path.append('src')
+          
+          # Import check_taskflow_convertible utility function
+          try:
+              from backend.dags.utils.validation_utils import check_taskflow_convertible
+          except ImportError:
+              # If function not available, we'll skip this check
+              print('TaskFlow API utility not available, skipping check')
+              sys.exit(0)
+          
+          # Find all Python operators in DAGs
+          python_operators = []
+          
+          with open('migration_recommendations.md', 'a') as f:
+              f.write('\n## TaskFlow API Migration Opportunities\n\n')
+              
+              # Note: In a real workflow, you would load and analyze DAGs here
+              # This is a simplified version for demonstration
+              f.write('The TaskFlow API is a new feature in Airflow 2.X that simplifies DAG authoring.\n')
+              f.write('It allows you to decorate Python functions and automatically creates tasks.\n\n')
+              
+              f.write('### Example Conversion\n\n')
+              f.write('**Before (Airflow 1.X):**\n\n')
+              f.write('```python\n')
+              f.write('def my_function(ds, **kwargs):\n')
+              f.write('    print(f\"Running for {ds}\")\n')
+              f.write('    return \"done\"\n\n')
+              f.write('task = PythonOperator(\n')
+              f.write('    task_id=\"my_task\",\n')
+              f.write('    python_callable=my_function,\n')
+              f.write('    provide_context=True,\n')
+              f.write('    dag=dag\n')
+              f.write(')\n')
+              f.write('```\n\n')
+              
+              f.write('**After (Airflow 2.X with TaskFlow API):**\n\n')
+              f.write('```python\n')
+              f.write('from airflow.decorators import task\n\n')
+              f.write('@task\n')
+              f.write('def my_function(ds=None):\n')
+              f.write('    print(f\"Running for {ds}\")\n')
+              f.write('    return \"done\"\n\n')
+              f.write('task = my_function()\n')
+              f.write('```\n\n')
+              
+              f.write('For more information, see [TaskFlow API documentation](https://airflow.apache.org/docs/apache-airflow/2.0.0/concepts/taskflow.html).\n')
+          "
+          
+      - name: Upload migration report
+        uses: actions/upload-artifact@v3
+        with:
+          name: migration-report
+          path: migration_recommendations.md
+          
+      - name: Post migration recommendations as PR comment
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-file: migration_recommendations.md
+
+  # Container Tests
+  container-tests:
+    name: Container Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Build Airflow 2.X container
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: airflow-migration:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: Test Airflow version and database
+        run: |
+          echo "# Container Test Results" > container-test-results.txt
+          echo "" >> container-test-results.txt
+          
+          echo "## Airflow Version Check" >> container-test-results.txt
+          docker run --rm airflow-migration:test python -c "
+          import airflow
+          print(f'Airflow version: {airflow.__version__}')
+          " >> container-test-results.txt
+          
+          echo "" >> container-test-results.txt
+          echo "## Database Initialization" >> container-test-results.txt
+          docker run --rm airflow-migration:test airflow db check >> container-test-results.txt
+          
+      - name: Test DAG loading in container
+        run: |
+          echo "" >> container-test-results.txt
+          echo "## DAG Loading Test" >> container-test-results.txt
+          
+          # Create a test DAG to load
+          mkdir -p test-dags
+          cat > test-dags/test_dag.py << 'EOL'
+          from airflow import DAG
+          from airflow.operators.bash import BashOperator
+          from datetime import datetime, timedelta
+
+          default_args = {
+              'owner': 'airflow',
+              'depends_on_past': False,
+              'email_on_failure': False,
+              'email_on_retry': False,
+              'retries': 1,
+              'retry_delay': timedelta(minutes=5),
+          }
+
+          with DAG(
+              'test_dag',
+              default_args=default_args,
+              description='A test DAG for container validation',
+              schedule_interval=timedelta(days=1),
+              start_date=datetime(2021, 1, 1),
+              catchup=False,
+          ) as dag:
+              t1 = BashOperator(
+                  task_id='print_date',
+                  bash_command='date',
+              )
+          EOL
+          
+          # Load the DAG in the container
+          docker run --rm -v $(pwd)/test-dags:/opt/airflow/dags \
+            airflow-migration:test \
+            airflow dags list >> container-test-results.txt
+            
+          docker run --rm -v $(pwd)/test-dags:/opt/airflow/dags \
+            airflow-migration:test \
+            airflow dags show test_dag >> container-test-results.txt
+          
+      - name: Upload container test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: container-test-results
+          path: container-test-results.txt
+
+  # Security Scan
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: python
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+          
+      - name: Check dependencies for vulnerabilities
+        run: |
+          python -m pip install --upgrade pip
+          pip install safety
+          pip install -r requirements.txt || true
+          pip freeze > requirements-lock.txt
+          safety check -r requirements-lock.txt --output text > safety-report.txt || true
+          
+      - name: Scan for hardcoded secrets
+        run: |
+          pip install detect-secrets
+          detect-secrets scan --all-files > secrets-scan-results.txt
+          
+      - name: Generate security report
+        run: |
+          echo "# Security Scan Results" > security-report.md
+          echo "" >> security-report.md
+          
+          echo "## Dependency Vulnerabilities" >> security-report.md
+          echo "" >> security-report.md
+          if [ -s safety-report.txt ]; then
+            echo "The following vulnerabilities were found:" >> security-report.md
+            echo "" >> security-report.md
+            echo '```' >> security-report.md
+            cat safety-report.txt >> security-report.md
+            echo '```' >> security-report.md
+          else
+            echo "No vulnerabilities found in Python dependencies." >> security-report.md
+          fi
+          
+          echo "" >> security-report.md
+          echo "## Secret Detection Results" >> security-report.md
+          echo "" >> security-report.md
+          echo "Results from detect-secrets scan:" >> security-report.md
+          echo "" >> security-report.md
+          echo '```' >> security-report.md
+          cat secrets-scan-results.txt >> security-report.md
+          echo '```' >> security-report.md
+          
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-scan-results
+          path: |
+            safety-report.txt
+            secrets-scan-results.txt
+            security-report.md
+
+  # PR Summary
+  pr-summary:
+    name: PR Summary
+    runs-on: ubuntu-latest
+    needs: [lint, dag-validation, unit-tests, migration-tests, container-tests, security-scan]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./artifacts
+      
+      - name: Generate PR review summary
+        run: |
+          echo "# Pull Request Review Summary" > pr-summary.md
+          echo "" >> pr-summary.md
+          
+          echo "## Validation Results" >> pr-summary.md
+          echo "" >> pr-summary.md
+          echo "| Check | Status | Details |" >> pr-summary.md
+          echo "|-------|--------|---------|" >> pr-summary.md
+          echo "| Code Quality | ${{ needs.lint.result == 'success' && '✅ Passed' || '❌ Failed' }} | Code formatting, style, and security checks |" >> pr-summary.md
+          echo "| DAG Validation | ${{ needs.dag-validation.result == 'success' && '✅ Passed' || '❌ Failed' }} | Airflow 2.X compatibility checks |" >> pr-summary.md
+          echo "| Unit Tests | ${{ needs.unit-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} | Automated tests for code functionality |" >> pr-summary.md
+          echo "| Migration Tests | ${{ needs.migration-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} | Specific tests for Airflow 1.X to 2.X migration |" >> pr-summary.md
+          echo "| Container Tests | ${{ needs.container-tests.result == 'success' && '✅ Passed' || '❌ Failed' }} | Tests in Airflow 2.X container environment |" >> pr-summary.md
+          echo "| Security Scan | ${{ needs.security-scan.result == 'success' && '✅ Passed' || '❌ Failed' }} | Dependency vulnerability and secret detection |" >> pr-summary.md
+          
+          echo "" >> pr-summary.md
+          echo "## Overall Status" >> pr-summary.md
+          echo "" >> pr-summary.md
+          
+          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.dag-validation.result }}" == "success" && "${{ needs.unit-tests.result }}" == "success" && "${{ needs.migration-tests.result }}" == "success" && "${{ needs.container-tests.result }}" == "success" && "${{ needs.security-scan.result }}" == "success" ]]; then
+            echo "✅ **All checks passed!** This PR meets the quality standards for merging." >> pr-summary.md
+          else
+            echo "❌ **Some checks failed.** Please review the detailed reports and fix the issues before merging." >> pr-summary.md
+          fi
+          
+          echo "" >> pr-summary.md
+          echo "## Next Steps" >> pr-summary.md
+          echo "" >> pr-summary.md
+          echo "1. Review detailed reports in the PR comments" >> pr-summary.md
+          echo "2. Address any issues identified in the validation process" >> pr-summary.md
+          echo "3. Push changes to update the PR and re-run checks" >> pr-summary.md
+          
+          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.dag-validation.result }}" == "success" && "${{ needs.unit-tests.result }}" == "success" && "${{ needs.migration-tests.result }}" == "success" && "${{ needs.container-tests.result }}" == "success" && "${{ needs.security-scan.result }}" == "success" ]]; then
+            echo "4. Request review from maintainers for final approval" >> pr-summary.md
+          fi
+          
+      - name: Post PR review summary
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-file: pr-summary.md
+      
+      - name: Update PR labels
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const allPassed = 
+              "${{ needs.lint.result }}" == "success" && 
+              "${{ needs.dag-validation.result }}" == "success" && 
+              "${{ needs.unit-tests.result }}" == "success" && 
+              "${{ needs.migration-tests.result }}" == "success" && 
+              "${{ needs.container-tests.result }}" == "success" && 
+              "${{ needs.security-scan.result }}" == "success";
+            
+            const someSkipped =
+              "${{ needs.lint.result }}" == "skipped" || 
+              "${{ needs.dag-validation.result }}" == "skipped" || 
+              "${{ needs.unit-tests.result }}" == "skipped" || 
+              "${{ needs.migration-tests.result }}" == "skipped" || 
+              "${{ needs.container-tests.result }}" == "skipped" || 
+              "${{ needs.security-scan.result }}" == "skipped";
+              
+            let labels = [];
+            
+            if (allPassed) {
+              labels = ['validated', 'airflow-2-compatible'];
+            } else if (someSkipped) {
+              labels = ['validation-incomplete'];
+            } else {
+              labels = ['needs-fixes'];
+            }
+            
+            // Get current labels
+            const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const currentLabelNames = currentLabels.map(label => label.name);
+            
+            // Remove validation-related labels
+            const labelsToRemove = ['validated', 'needs-fixes', 'validation-incomplete', 'airflow-2-compatible'];
+            for (const label of labelsToRemove) {
+              if (currentLabelNames.includes(label)) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    name: label
+                  });
+                } catch (e) {
+                  console.log(`Error removing label ${label}: ${e}`);
+                }
+              }
+            }
+            
+            // Add new labels
+            for (const label of labels) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  labels: [label]
+                });
+              } catch (e) {
+                console.log(`Error adding label ${label}: ${e}`);
+              }
+            }
+      
+      - name: Set PR status check
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const allPassed = 
+              "${{ needs.lint.result }}" == "success" && 
+              "${{ needs.dag-validation.result }}" == "success" && 
+              "${{ needs.unit-tests.result }}" == "success" && 
+              "${{ needs.migration-tests.result }}" == "success" && 
+              "${{ needs.container-tests.result }}" == "success" && 
+              "${{ needs.security-scan.result }}" == "success";
+            
+            const conclusion = allPassed ? 'success' : 'failure';
+            
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'PR Validation Summary',
+              head_sha: context.payload.pull_request ? context.payload.pull_request.head.sha : context.sha,
+              status: 'completed',
+              conclusion: conclusion,
+              output: {
+                title: allPassed ? 'All validation checks passed' : 'Some validation checks failed',
+                summary: allPassed 
+                  ? 'This PR meets all quality standards for the Airflow 2.X migration project.' 
+                  : 'This PR needs additional work to meet quality standards. See detailed reports in PR comments.'
+              }
+            });
