@@ -1,0 +1,215 @@
+{
+  "version": "1.0.0",
+  "description": "Multi-stage approval workflow for Airflow 2.X migration on Cloud Composer 2",
+  "environments": [
+    {
+      "name": "dev",
+      "description": "Development Environment",
+      "requiresApproval": false,
+      "requiredApprovers": [],
+      "minApprovals": 0,
+      "autoPromote": false,
+      "timeout": 0
+    },
+    {
+      "name": "qa",
+      "description": "Quality Assurance Environment",
+      "requiresApproval": true,
+      "requiredApprovers": ["PEER", "QA"],
+      "minApprovals": 2,
+      "autoPromote": false,
+      "timeout": 259200,
+      "requiredChecks": [
+        {
+          "name": "dag_validation",
+          "script": "src/backend/scripts/validate_dags.py",
+          "parameters": {
+            "environment": "qa",
+            "threshold": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "prod",
+      "description": "Production Environment",
+      "requiresApproval": true,
+      "requiredApprovers": ["CAB", "ARCHITECT", "STAKEHOLDER"],
+      "minApprovals": 3,
+      "autoPromote": false,
+      "timeout": 345600,
+      "requiredChecks": [
+        {
+          "name": "dag_validation",
+          "script": "src/backend/scripts/validate_dags.py",
+          "parameters": {
+            "environment": "prod",
+            "threshold": 0
+          }
+        },
+        {
+          "name": "security_scan",
+          "script": "src/test/security_tests/test_dag_security.py",
+          "parameters": {
+            "level": "strict"
+          }
+        },
+        {
+          "name": "performance_test",
+          "script": "src/test/performance_tests/test_dag_parsing_performance.py",
+          "parameters": {
+            "threshold_seconds": 30
+          }
+        }
+      ],
+      "approvalForm": {
+        "requiredFields": [
+          {
+            "name": "business_justification",
+            "type": "text",
+            "minLength": 50,
+            "description": "Business justification for this deployment"
+          },
+          {
+            "name": "risk_assessment",
+            "type": "select",
+            "options": ["Low", "Medium", "High"],
+            "description": "Risk assessment of this deployment"
+          },
+          {
+            "name": "rollback_plan",
+            "type": "text",
+            "minLength": 50,
+            "description": "Detailed rollback plan if deployment fails"
+          }
+        ]
+      }
+    }
+  ],
+  "stages": [
+    {
+      "name": "codeReview",
+      "description": "Initial code review stage",
+      "requiredActions": ["PULL_REQUEST", "CODE_REVIEW", "TESTS_PASSING"],
+      "nextStage": "dev"
+    },
+    {
+      "name": "dev",
+      "description": "Development deployment stage",
+      "requiredActions": [],
+      "nextStage": "qa"
+    },
+    {
+      "name": "qa",
+      "description": "QA deployment stage",
+      "requiredActions": ["PEER_APPROVAL", "QA_APPROVAL"],
+      "nextStage": "prod"
+    },
+    {
+      "name": "prod",
+      "description": "Production deployment stage",
+      "requiredActions": ["CAB_APPROVAL", "ARCHITECT_APPROVAL", "STAKEHOLDER_APPROVAL"],
+      "nextStage": null
+    }
+  ],
+  "approverRoles": [
+    {
+      "role": "PEER",
+      "description": "Developer peer review",
+      "permissions": ["review", "approve", "reject"],
+      "groups": ["airflow-developers"]
+    },
+    {
+      "role": "QA",
+      "description": "Quality assurance review",
+      "permissions": ["review", "approve", "reject"],
+      "groups": ["airflow-qa"]
+    },
+    {
+      "role": "CAB",
+      "description": "Change Advisory Board review",
+      "permissions": ["review", "approve", "reject", "request_changes"],
+      "groups": ["change-advisory-board"]
+    },
+    {
+      "role": "ARCHITECT",
+      "description": "System architect review",
+      "permissions": ["review", "approve", "reject", "request_changes"],
+      "groups": ["architects"]
+    },
+    {
+      "role": "STAKEHOLDER",
+      "description": "Business stakeholder review",
+      "permissions": ["review", "approve", "reject"],
+      "groups": ["business-stakeholders"]
+    }
+  ],
+  "approval_token": {
+    "format": "JWT",
+    "expiration": 604800,
+    "requiredClaims": ["environment", "approver_ids", "timestamp", "approval_id"],
+    "signingKey": {
+      "source": "SECRET_MANAGER",
+      "keyName": "approval-workflow-signing-key",
+      "algorithm": "HS256",
+      "rotationPeriod": 2592000
+    }
+  },
+  "notificationSettings": {
+    "channels": [
+      {
+        "type": "email",
+        "enabled": true,
+        "templates": {
+          "request": "templates/email/approval_request.html",
+          "approved": "templates/email/approval_granted.html",
+          "rejected": "templates/email/approval_rejected.html",
+          "expired": "templates/email/approval_expired.html"
+        },
+        "events": [
+          "approval_requested",
+          "approval_granted",
+          "approval_rejected",
+          "approval_expired"
+        ]
+      },
+      {
+        "type": "slack",
+        "enabled": true,
+        "channels": {
+          "dev": "#airflow-dev-deployments",
+          "qa": "#airflow-qa-deployments",
+          "prod": "#airflow-prod-deployments"
+        },
+        "webhookSecret": "SLACK_WEBHOOK_SECRET",
+        "events": [
+          "approval_requested",
+          "approval_granted",
+          "approval_rejected",
+          "approval_expired"
+        ]
+      }
+    ],
+    "reminderInterval": 43200
+  },
+  "timeoutSettings": {
+    "defaultTimeout": 172800,
+    "expirationAction": "reject",
+    "reminderBeforeExpiration": 43200
+  },
+  "auditSettings": {
+    "enabled": true,
+    "storageLocation": "gs://airflow-approval-logs",
+    "retentionPeriod": 7776000,
+    "logStructure": {
+      "timestamp": "ISO8601 timestamp",
+      "actor": "User who performed the action",
+      "action": "Action performed (request/approve/reject)",
+      "environment": "Target environment",
+      "details": "Additional context",
+      "approvalId": "Unique approval identifier",
+      "deploymentId": "Associated deployment identifier"
+    },
+    "pathTemplate": "audits/{environment}/{year}/{month}/{day}/{approval_id}.json"
+  }
+}
