@@ -1,0 +1,59 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: composer-dev
+  labels:
+    environment: development
+    app: airflow
+    component: composer
+    version: 2.x
+    managed-by: terraform
+  annotations:
+    description: "Namespace for Cloud Composer 2 development environment"
+    environment-type: "development"
+    airflow-version: "2.x"
+    deployment-date: "auto-filled by deployment script"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: composer-qa
+  labels:
+    environment: qa
+    app: airflow
+    component: composer
+    version: 2.x
+    managed-by: terraform
+  annotations:
+    description: "Namespace for Cloud Composer 2 QA environment"
+    environment-type: "qa"
+    airflow-version: "2.x"
+    deployment-date: "auto-filled by deployment script"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: composer-prod
+  labels:
+    environment: production
+    app: airflow
+    component: composer
+    version: 2.x
+    managed-by: terraform
+  annotations:
+    description: "Namespace for Cloud Composer 2 production environment"
+    environment-type: "production"
+    airflow-version: "2.x"
+    deployment-date: "auto-filled by deployment script"
+    owner: "platform-team"
+    approval-required: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    name: monitoring
+    app: monitoring
+    managed-by: terraform
