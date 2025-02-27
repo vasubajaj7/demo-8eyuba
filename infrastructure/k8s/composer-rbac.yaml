@@ -1,0 +1,273 @@
+# Cloud Composer 2 RBAC Configuration
+# 
+# This file defines the Kubernetes Role-Based Access Control (RBAC) configuration
+# for Cloud Composer 2 environments, which run Apache Airflow 2.X.
+# 
+# It establishes:
+# - Service accounts for Airflow components (webserver, scheduler, workers)
+# - Roles with varying permission levels for different access types
+# - RoleBindings to connect accounts and groups to appropriate roles
+# - ClusterRole and ClusterRoleBinding for monitoring purposes
+#
+# The configuration implements a least-privilege security model with role-based
+# access control following enterprise security best practices.
+---
+# Service Accounts for Airflow components
+# Service account for Airflow webserver component - provides UI and API access
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: airflow-webserver
+  namespace: composer-system
+---
+# Service account for Airflow scheduler component - schedules and triggers DAGs
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: airflow-scheduler
+  namespace: composer-system
+---
+# Service account for Airflow worker pods - executes DAG tasks
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: airflow-worker
+  namespace: composer-system
+---
+# Roles with varying permission levels
+# Role for the Airflow webserver - needs read access to configs and pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-webserver
+  namespace: composer-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+# Role for the Airflow scheduler - needs to create and manage pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-scheduler
+  namespace: composer-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+# Role for Airflow workers - needs read access to configs and pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-worker
+  namespace: composer-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+# Role for Airflow viewers - read-only access to pods and logs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-viewer
+  namespace: composer-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+# Role for Airflow editors - can view and update certain resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-editor
+  namespace: composer-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "update"]
+---
+# Role for Airflow admins - extensive management permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-admin
+  namespace: composer-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec", "services", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+# Role for Airflow security admins - full security administration capabilities
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-security-admin
+  namespace: composer-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec", "services", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+# RoleBindings - connect service accounts and user groups to roles
+# Bind webserver service account to webserver role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-webserver
+  namespace: composer-system
+subjects:
+  - kind: ServiceAccount
+    name: airflow-webserver
+    namespace: composer-system
+roleRef:
+  kind: Role
+  name: airflow-webserver
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind scheduler service account to scheduler role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-scheduler
+  namespace: composer-system
+subjects:
+  - kind: ServiceAccount
+    name: airflow-scheduler
+    namespace: composer-system
+roleRef:
+  kind: Role
+  name: airflow-scheduler
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind worker service account to worker role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-worker
+  namespace: composer-system
+subjects:
+  - kind: ServiceAccount
+    name: airflow-worker
+    namespace: composer-system
+roleRef:
+  kind: Role
+  name: airflow-worker
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind viewer group to viewer role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-viewer-binding
+  namespace: composer-system
+subjects:
+  - kind: Group
+    name: airflow-viewers
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: airflow-viewer
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind editor group to editor role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-editor-binding
+  namespace: composer-system
+subjects:
+  - kind: Group
+    name: airflow-editors
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: airflow-editor
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind admin group to admin role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-admin-binding
+  namespace: composer-system
+subjects:
+  - kind: Group
+    name: airflow-admins
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: airflow-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind security admin group to security admin role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-security-admin-binding
+  namespace: composer-system
+subjects:
+  - kind: Group
+    name: airflow-security-admins
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: airflow-security-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# ClusterRole for monitoring - allows access to cluster-wide metrics
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: composer-monitoring
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+# ClusterRoleBinding for monitoring - binds service account to monitoring role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: composer-monitoring
+subjects:
+  - kind: ServiceAccount
+    name: composer-monitoring
+    namespace: composer-system
+roleRef:
+  kind: ClusterRole
+  name: composer-monitoring
+  apiGroup: rbac.authorization.k8s.io
