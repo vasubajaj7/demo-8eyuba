@@ -1,0 +1,97 @@
+{{/* 
+service.yaml for Cloud Composer 2 with Airflow 2.X components.
+This file defines Kubernetes Service resources for Airflow components including
+webserver, scheduler, workers, and redis.
+*/}}
+
+{{/* Webserver Service */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "composer2.webserverName" . }}
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webserver
+  {{- $env := include "composer2.environment" . }}
+  {{- if eq $env "prod" }}
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "{{ include "composer2.fullname" . }}-web-backend-config"}'
+    cloud.google.com/app-protocols: '{"http": "HTTP"}'
+  {{- end }}
+spec:
+  {{- $env := include "composer2.environment" . }}
+  {{- if eq $env "prod" }}
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  {{- else }}
+  type: ClusterIP
+  {{- end }}
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "composer2.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: webserver
+
+---
+{{/* Scheduler Service */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "composer2.schedulerName" . }}
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8793
+      targetPort: 8793
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "composer2.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+
+---
+{{/* Worker Service */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "composer2.workerName" . }}
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8793
+      targetPort: 8793
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "composer2.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+
+---
+{{/* Redis Service */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "composer2.fullname" . }}-redis
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+  selector:
+    {{- include "composer2.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
