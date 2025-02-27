@@ -1,0 +1,111 @@
+{
+  "name": "airflow-composer2-migration",
+  "version": "1.0.0",
+  "description": "Migration toolkit for Apache Airflow 1.10.15 to 2.X on Cloud Composer 2",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/example/airflow-composer2-migration"
+  },
+  "author": "DevOps Team <devops@example.com>",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch",
+    "lint": "eslint 'src/**/*.{js,jsx,ts,tsx}'",
+    "lint:fix": "eslint 'src/**/*.{js,jsx,ts,tsx}' --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "validate-dags": "python scripts/validate_dags.py --dag-directory dags/ --validation-level WARNING --output-format json --output-file validation-report.json",
+    "deploy:dev": "python scripts/deploy_dags.py --environment dev --source-folder dags/",
+    "deploy:qa": "python scripts/deploy_dags.py --environment qa --source-folder dags/",
+    "deploy:prod": "python scripts/deploy_dags.py --environment prod --source-folder dags/",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "bootstrap": "^5.3.0",
+    "bootstrap-icons": "^1.10.5",
+    "axios": "^1.4.0",
+    "moment": "^2.29.4",
+    "lodash": "^4.17.21",
+    "chart.js": "^4.3.0",
+    "react-chartjs-2": "^5.2.0",
+    "semver": "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5",
+    "@types/react": "^18.2.7",
+    "@types/react-dom": "^18.2.4",
+    "@types/jest": "^29.5.1",
+    "@typescript-eslint/eslint-plugin": "^5.59.7",
+    "@typescript-eslint/parser": "^5.59.7",
+    "eslint": "^8.40.0",
+    "eslint-config-prettier": "^8.8.0",
+    "eslint-plugin-react": "^7.32.2",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "prettier": "^2.8.8",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/jest-dom": "^5.16.5",
+    "webpack": "^5.82.1",
+    "webpack-cli": "^5.1.1",
+    "webpack-dev-server": "^4.15.0",
+    "ts-loader": "^9.4.3",
+    "css-loader": "^6.7.4",
+    "sass-loader": "^13.3.0",
+    "sass": "^1.62.1",
+    "style-loader": "^3.3.3",
+    "file-loader": "^6.2.0",
+    "html-webpack-plugin": "^5.5.1",
+    "clean-webpack-plugin": "^4.0.0",
+    "mini-css-extract-plugin": "^2.7.6",
+    "husky": "^7.0.4",
+    "lint-staged": "^12.3.4"
+  },
+  "eslintConfig": {
+    "extends": [
+      "eslint:recommended",
+      "plugin:react/recommended",
+      "plugin:@typescript-eslint/recommended",
+      "prettier"
+    ],
+    "plugins": [
+      "react",
+      "react-hooks",
+      "@typescript-eslint"
+    ],
+    "rules": {
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
+      "@typescript-eslint/no-explicit-any": "warn",
+      "react/prop-types": "off"
+    }
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "jsdom",
+    "setupFilesAfterEnv": [
+      "@testing-library/jest-dom/extend-expect"
+    ],
+    "moduleNameMapper": {
+      "\\.(css|less|scss)$": "<rootDir>/__mocks__/styleMock.js",
+      "\\.(jpg|jpeg|png|gif|svg)$": "<rootDir>/__mocks__/fileMock.js"
+    }
+  },
+  "browserslist": [
+    ">0.2%",
+    "not dead",
+    "not ie <= 11",
+    "not op_mini all"
+  ]
+}
