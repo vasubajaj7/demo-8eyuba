@@ -1,0 +1,125 @@
+displayName: "Task Duration Alert"
+documentation:
+  content: |
+    # Task Duration Alert
+
+    This alert policy monitors task execution durations in Cloud Composer 2 environments running Airflow 2.X. It is designed to detect performance issues that could impact workflow completion times and overall system reliability.
+
+    ## Conditions
+    - Critical Task Duration: Immediate alert when critical ETL tasks take longer than 900 seconds (15 minutes)
+    - Standard Task Duration: Alert when any task takes longer than 600 seconds (10 minutes)
+    - Increasing Duration Trend: Alert when task duration shows a consistent increase over time (potential degradation)
+    - Queue Time: Alert when tasks spend excessive time (>300 seconds) in the queue before execution
+
+    ## Notification Channels
+    - Email to operations team
+    - Slack alerts to environment-specific channels
+    - PagerDuty for critical alerts in production
+
+    ## Remediation
+    1. Check Airflow logs for specific error messages
+    2. Examine task code for inefficiencies or resource bottlenecks
+    3. Check external service dependencies for slowdowns
+    4. Verify worker pool sizing and scaling configuration
+    5. Check for competing workloads in the environment
+    6. For queue delays, check scheduler performance and worker availability
+    7. Reference the performance tuning guide for detailed optimization steps
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "Critical Task Duration"
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/dag/task/duration" AND resource.type="cloud_composer_environment" AND (metadata.system_labels.task_id=monitoring.regex.full_match("extract") OR metadata.system_labels.task_id=monitoring.regex.full_match("process") OR metadata.system_labels.task_id=monitoring.regex.full_match("load_data"))'
+      aggregations:
+        - alignmentPeriod: 300s
+          perSeriesAligner: ALIGN_PERCENTILE_95
+          crossSeriesReducer: REDUCE_MEAN
+          groupByFields:
+            - metadata.system_labels.task_id
+            - metadata.system_labels.dag_id
+      comparison: COMPARISON_GT
+      thresholdValue: 900
+      duration: 300s
+      trigger:
+        count: 1
+    severity: SEVERITY_CRITICAL
+  - displayName: "Standard Task Duration"
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/dag/task/duration" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 300s
+          perSeriesAligner: ALIGN_PERCENTILE_95
+          crossSeriesReducer: REDUCE_MEAN
+          groupByFields:
+            - metadata.system_labels.task_id
+            - metadata.system_labels.dag_id
+      comparison: COMPARISON_GT
+      thresholdValue: 600
+      duration: 300s
+      trigger:
+        count: 1
+    severity: SEVERITY_WARNING
+  - displayName: "Increasing Duration Trend"
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/dag/task/duration" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 3600s
+          perSeriesAligner: ALIGN_DELTA
+          crossSeriesReducer: REDUCE_MEAN
+          groupByFields:
+            - metadata.system_labels.task_id
+            - metadata.system_labels.dag_id
+      comparison: COMPARISON_GT
+      thresholdValue: 300
+      duration: 3600s
+      trigger:
+        count: 3
+    severity: SEVERITY_WARNING
+  - displayName: "Excessive Queue Time"
+    conditionThreshold:
+      filter: 'metric.type="composer.googleapis.com/environment/dag/task/queue_time" AND resource.type="cloud_composer_environment"'
+      aggregations:
+        - alignmentPeriod: 300s
+          perSeriesAligner: ALIGN_PERCENTILE_95
+          crossSeriesReducer: REDUCE_MEAN
+          groupByFields:
+            - metadata.system_labels.task_id
+            - metadata.system_labels.dag_id
+      comparison: COMPARISON_GT
+      thresholdValue: 300
+      duration: 300s
+      trigger:
+        count: 1
+    severity: SEVERITY_WARNING
+notificationChannels:
+  - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+  - projects/${PROJECT_ID}/notificationChannels/${SLACK_CHANNEL_ID}
+  - projects/${PROJECT_ID}/notificationChannels/${PAGERDUTY_CHANNEL_ID}
+alertStrategy:
+  autoClose: 86400s
+  notificationRateLimit:
+    period: 3600s
+userLabels:
+  severity: critical
+  category: performance
+  component: task
+  environment: composer2
+  version: 2.x
+enabled: true
+environment_variables:
+  dev:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_DEV_CHANNEL_ID}
+    severity: WARNING
+  qa:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_QA_CHANNEL_ID}
+    severity: WARNING
+  prod:
+    notificationChannels:
+      - projects/${PROJECT_ID}/notificationChannels/${EMAIL_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${SLACK_PROD_CHANNEL_ID}
+      - projects/${PROJECT_ID}/notificationChannels/${PAGERDUTY_CHANNEL_ID}
+    severity: CRITICAL
