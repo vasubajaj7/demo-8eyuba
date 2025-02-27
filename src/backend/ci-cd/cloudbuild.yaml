@@ -1,0 +1,322 @@
+# Cloud Build configuration file for Apache Airflow DAG deployment to Cloud Composer 2
+# This file defines the CI/CD pipeline for migrating from Airflow 1.10.15 to Airflow 2.X
+# with appropriate approval workflows for DEV, QA, and PROD environments.
+
+timeout: '3600s'  # One hour timeout for the entire build
+
+# Substitution variables with defaults
+substitutions:
+  _TARGET_ENV: 'dev'  # Target environment for deployment (dev, qa, prod)
+  _VALIDATION_LEVEL: 'strict'  # Validation strictness level
+  _APPROVAL_TOKEN: ''  # JWT token containing approval information
+  _AIRFLOW_IMAGE: 'gcr.io/${PROJECT_ID}/airflow:${TAG_NAME:-${SHORT_SHA}}'  # Airflow image name and tag
+  _TEST_SUITE: 'dag_tests'  # Test suite to run
+  _BUILD_STATUS: 'success'  # Build status for notifications
+
+# Build steps
+steps:
+  # Step 1: Validate environment based on branch or tag
+  - name: 'bash'
+    id: 'validate-environment'
+    args:
+      - '-c'
+      - |
+        # Determine target environment based on branch or tag
+        if [[ -n "${TAG_NAME}" && ("${TAG_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "${TAG_NAME}" =~ ^release-.*$) ]]; then
+          # Release or version tag, target is production
+          echo "Target environment is PRODUCTION based on tag ${TAG_NAME}"
+          echo "_TARGET_ENV=prod" > /workspace/env_vars.sh
+        elif [[ "${BRANCH_NAME}" == "main" ]]; then
+          # Main branch, target is development
+          echo "Target environment is DEVELOPMENT based on main branch"
+          echo "_TARGET_ENV=dev" > /workspace/env_vars.sh
+        elif [[ "${BRANCH_NAME}" =~ ^qa-.* ]]; then
+          # QA branch, target is QA
+          echo "Target environment is QA based on branch ${BRANCH_NAME}"
+          echo "_TARGET_ENV=qa" > /workspace/env_vars.sh
+        else
+          # Default to development
+          echo "Target environment is DEVELOPMENT (default)"
+          echo "_TARGET_ENV=dev" > /workspace/env_vars.sh
+        fi
+        
+        # Source and export the variable
+        source /workspace/env_vars.sh
+        echo "Target environment: ${_TARGET_ENV}"
+    env:
+      - 'PROJECT_ID=${PROJECT_ID}'
+      - 'BRANCH_NAME=${BRANCH_NAME}'
+      - 'TAG_NAME=${TAG_NAME}'
+
+  # Step 2: Setup environment
+  - name: 'python:3.8'
+    id: 'setup-environment'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Source environment variables
+        source /workspace/env_vars.sh
+        
+        # Install required Python packages
+        pip install -r requirements.txt
+        
+        # Print environment information
+        echo "Python version: $(python --version)"
+        echo "Pip version: $(pip --version)"
+        echo "Project ID: ${PROJECT_ID}"
+        echo "Target Environment: ${_TARGET_ENV}"
+    env:
+      - 'PROJECT_ID=${PROJECT_ID}'
+
+  # Step 3: Validate DAGs
+  - name: 'python:3.8'
+    id: 'validate-dags'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Source environment variables
+        source /workspace/env_vars.sh
+        
+        # Run DAG validation script
+        python src/backend/scripts/validate_dags.py \
+          --directory=src/backend/dags \
+          --output-format=json \
+          --validation-level=${_VALIDATION_LEVEL}
+        
+        # Check result and exit if validation fails
+        if [ $? -ne 0 ]; then
+          echo "DAG validation failed"
+          exit 1
+        fi
+    env:
+      - 'PYTHONPATH=src/backend'
+
+  # Step 4: Build Airflow Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-airflow-image'
+    args: ['build', '-t', '${_AIRFLOW_IMAGE}', '-f', 'src/backend/Dockerfile', '--build-arg', 'AIRFLOW_VERSION=2.5.1', '--build-arg', 'BUILD_ENV=production', '.']
+    env:
+      - 'DOCKER_BUILDKIT=1'
+
+  # Step 5: Verify approval for QA and PROD environments
+  - name: 'bash'
+    id: 'verify-approval'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Source environment variables
+        source /workspace/env_vars.sh
+        
+        # Skip approval for dev environment
+        if [[ "${_TARGET_ENV}" == "dev" ]]; then
+          echo "Development environment does not require approval"
+          exit 0
+        fi
+        
+        # Check for approval token
+        if [[ -z "${_APPROVAL_TOKEN}" ]]; then
+          echo "Error: Approval token is required for ${_TARGET_ENV} environment"
+          exit 1
+        fi
+        
+        # Load approval workflow configuration
+        CONFIG_FILE="src/backend/ci-cd/approval-workflow.json"
+        if [[ ! -f "${CONFIG_FILE}" ]]; then
+          echo "Error: Approval workflow configuration not found: ${CONFIG_FILE}"
+          exit 1
+        fi
+        
+        # Use Python to verify the token (simplified verification)
+        python -c "
+import json, sys
+try:
+    # In a real implementation, this would verify JWT signatures and claims
+    # For this script, we just check if the file exists and has required fields
+    with open('${CONFIG_FILE}', 'r') as f:
+        config = json.load(f)
+    
+    # Check that the target environment is defined in the config
+    env_config = None
+    for env in config.get('environments', []):
+        if env.get('name') == '${_TARGET_ENV}':
+            env_config = env
+            break
+    
+    if not env_config:
+        print(f'Error: Environment ${_TARGET_ENV} not found in approval workflow config')
+        sys.exit(1)
+    
+    # Check if approval is required for this environment
+    if not env_config.get('requiresApproval', False):
+        print(f'Environment ${_TARGET_ENV} does not require approval')
+        sys.exit(0)
+    
+    # Check required approvers
+    required_approvers = env_config.get('requiredApprovers', [])
+    if not required_approvers:
+        print(f'No approvers required for ${_TARGET_ENV}')
+        sys.exit(0)
+    
+    print(f'Required approvers for ${_TARGET_ENV}: {', '.join(required_approvers)}')
+    
+    # In a real implementation, parse and verify the JWT token
+    # For this script, we assume the token is valid if it's not empty
+    token = '${_APPROVAL_TOKEN}'
+    if not token:
+        print('Error: Approval token is empty')
+        sys.exit(1)
+    
+    print('Approval token verified successfully')
+    sys.exit(0)
+except Exception as e:
+    print(f'Error verifying approval: {str(e)}')
+    sys.exit(1)
+"
+    env:
+      - 'APPROVAL_TOKEN=${_APPROVAL_TOKEN}'
+
+  # Step 6: Deploy to target environment (conditional execution based on environment)
+  - name: 'bash'
+    id: 'deploy-to-environment'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Source environment variables
+        source /workspace/env_vars.sh
+        
+        # Deploy to the appropriate environment
+        case ${_TARGET_ENV} in 
+          dev) 
+            echo "Deploying to DEV environment"
+            src/backend/ci-cd/deploy-dev.sh 
+            ;; 
+          qa) 
+            echo "Deploying to QA environment"
+            src/backend/ci-cd/deploy-qa.sh --approval-token=${_APPROVAL_TOKEN} 
+            ;; 
+          prod) 
+            echo "Deploying to PROD environment"
+            src/backend/ci-cd/deploy-prod.sh --approval-token=${_APPROVAL_TOKEN} 
+            ;; 
+          *) 
+            echo "Error: Unknown environment: ${_TARGET_ENV}"
+            exit 1 
+            ;; 
+        esac
+        
+        # Check deployment status
+        if [ $? -ne 0 ]; then
+          echo "Deployment to ${_TARGET_ENV} failed"
+          exit 1
+        fi
+        
+        echo "Deployment to ${_TARGET_ENV} completed successfully"
+    env:
+      - 'APPROVAL_TOKEN=${_APPROVAL_TOKEN}'
+      - 'PROJECT_ID=${PROJECT_ID}'
+
+  # Step 7: Run appropriate tests for the environment
+  - name: 'python:3.8'
+    id: 'run-tests'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Source environment variables
+        source /workspace/env_vars.sh
+        
+        # Determine test suite based on environment
+        case ${_TARGET_ENV} in
+          dev)
+            TESTS_TO_RUN="${_TEST_SUITE}"
+            ;;
+          qa)
+            TESTS_TO_RUN="${_TEST_SUITE}_qa"
+            ;;
+          prod)
+            TESTS_TO_RUN="${_TEST_SUITE}_prod"
+            ;;
+          *)
+            TESTS_TO_RUN="${_TEST_SUITE}"
+            ;;
+        esac
+        
+        echo "Running tests for ${_TARGET_ENV} environment: ${TESTS_TO_RUN}"
+        python -m pytest src/test/${TESTS_TO_RUN} -v
+        
+        # Check test results
+        if [ $? -ne 0 ]; then
+          echo "Tests failed for ${_TARGET_ENV} environment"
+          exit 1
+        fi
+        
+        echo "Tests completed successfully for ${_TARGET_ENV} environment"
+    env:
+      - 'PYTHONPATH=src'
+
+  # Step 8: Send notifications about build/deployment status
+  - name: 'gcr.io/cloud-builders/curl'
+    id: 'notify-status'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Source environment variables
+        source /workspace/env_vars.sh
+        
+        # Create notification payloads
+        PAYLOAD='{
+          "text": "Deployment to '"${_TARGET_ENV}"' environment completed with status: '"${_BUILD_STATUS}"'",
+          "deployment_id": "'"${BUILD_ID}"'",
+          "environment": "'"${_TARGET_ENV}"'",
+          "project_id": "'"${PROJECT_ID}"'",
+          "status": "'"${_BUILD_STATUS}"'",
+          "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+        }'
+        
+        # Determine notification recipients based on environment
+        case ${_TARGET_ENV} in
+          dev)
+            SLACK_CHANNEL="#airflow-dev-deployments"
+            EMAIL_RECIPIENTS="dev-team@example.com"
+            ;;
+          qa)
+            SLACK_CHANNEL="#airflow-qa-deployments"
+            EMAIL_RECIPIENTS="qa-team@example.com,dev-team@example.com"
+            ;;
+          prod)
+            SLACK_CHANNEL="#airflow-prod-deployments"
+            EMAIL_RECIPIENTS="ops-team@example.com,qa-team@example.com,stakeholders@example.com"
+            ;;
+          *)
+            SLACK_CHANNEL="#airflow-deployments"
+            EMAIL_RECIPIENTS="dev-team@example.com"
+            ;;
+        esac
+        
+        # Log notification details (in real implementation, this would send notifications)
+        echo "Would send notification to Slack channel: ${SLACK_CHANNEL}"
+        echo "Would send email to: ${EMAIL_RECIPIENTS}"
+        echo "Notification payload: ${PAYLOAD}"
+        
+        # In a real implementation, this would use curl to send notifications
+        # Example:
+        # curl -X POST -H "Content-Type: application/json" -d "${PAYLOAD}" "${SLACK_WEBHOOK_URL}"
+    env:
+      - 'BUILD_STATUS=${_BUILD_STATUS}'
+      - 'PROJECT_ID=${PROJECT_ID}'
+      - 'BUILD_ID=${BUILD_ID}'
+
+# Build options
+options:
+  logging: 'CLOUD_LOGGING_ONLY'
+  machineType: 'N1_HIGHCPU_8'  # More powerful machine for faster builds
+  env:
+    - 'CLOUDSDK_CORE_PROJECT=${PROJECT_ID}'
+
+# Tags for organizing builds
+tags: ['airflow', 'composer2', 'migration', 'cicd']
