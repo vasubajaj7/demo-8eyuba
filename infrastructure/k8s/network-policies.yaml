@@ -1,0 +1,245 @@
+# Network policies for Cloud Composer 2 environment
+# These policies implement security zones, enforce data in transit security,
+# and provide access control as part of the overall security protocols
+# Version: 1.0.0
+
+---
+# Default deny all ingress traffic policy to implement a secure-by-default stance
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: composer
+  labels:
+    app: airflow
+    component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+---
+# Default deny all egress traffic policy to implement a secure-by-default stance
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: composer
+  labels:
+    app: airflow
+    component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+
+---
+# Allow inbound traffic to the webserver component from authorized sources
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webserver-ingress
+  namespace: composer
+  labels:
+    app: airflow
+    component: webserver
+spec:
+  podSelector:
+    matchLabels:
+      component: webserver
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+            except:
+              - 10.0.0.0/16
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Allow worker pods to connect to external services and GCP APIs
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-egress
+  namespace: composer
+  labels:
+    app: airflow
+    component: worker
+spec:
+  podSelector:
+    matchLabels:
+      component: worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+
+---
+# Control access to the Cloud SQL database from Airflow components
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: database-access
+  namespace: composer
+  labels:
+    app: airflow
+    component: database
+spec:
+  podSelector:
+    matchLabels:
+      component: database-proxy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              component: webserver
+        - podSelector:
+            matchLabels:
+              component: scheduler
+        - podSelector:
+            matchLabels:
+              component: worker
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# Control access to Redis from Airflow components
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-access
+  namespace: composer
+  labels:
+    app: airflow
+    component: redis
+spec:
+  podSelector:
+    matchLabels:
+      component: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              component: webserver
+        - podSelector:
+            matchLabels:
+              component: scheduler
+        - podSelector:
+            matchLabels:
+              component: worker
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# Allow communication between scheduler and worker pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scheduler-worker-communication
+  namespace: composer
+  labels:
+    app: airflow
+    component: scheduler-worker
+spec:
+  podSelector:
+    matchLabels:
+      component: worker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              component: scheduler
+
+---
+# Allow all pods to access DNS services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: composer
+  labels:
+    app: airflow
+    component: dns
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# Allow access to Google Cloud Storage from Airflow components
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gcs-access
+  namespace: composer
+  labels:
+    app: airflow
+    component: storage
+spec:
+  podSelector:
+    matchLabels:
+      airflow-component: true
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# Allow access to Secret Manager from Airflow components for retrieving credentials
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: secret-manager-access
+  namespace: composer
+  labels:
+    app: airflow
+    component: secrets
+spec:
+  podSelector:
+    matchLabels:
+      airflow-component: true
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
