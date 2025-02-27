@@ -1,0 +1,682 @@
+{{- /*
+Deployment template for Cloud Composer 2 with Airflow 2.X components.
+This file defines Kubernetes Deployment resources for the Airflow webserver, scheduler, and worker components,
+with appropriate configurations for different environments (dev, qa, prod).
+*/}}
+
+{{- /* 
+Helper function to generate replicas based on component and environment 
+*/}}
+{{- define "composer2.componentReplicas" -}}
+{{- $component := index . 0 -}}
+{{- $context := index . 1 -}}
+{{- $env := include "composer2.environment" $context -}}
+{{- if eq $component "webserver" -}}
+  {{- if eq $env "dev" -}}1{{- else if eq $env "qa" -}}2{{- else -}}4{{- end -}}
+{{- else if eq $component "scheduler" -}}
+  {{- if eq $env "dev" -}}1{{- else if eq $env "qa" -}}1{{- else -}}2{{- end -}}
+{{- else if eq $component "worker" -}}
+  {{- if eq $env "dev" -}}1{{- else if eq $env "qa" -}}2{{- else -}}4{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* 
+Helper function to generate deployment strategy based on component 
+*/}}
+{{- define "composer2.deploymentStrategy" -}}
+{{- $component := . -}}
+{{- if eq $component "scheduler" }}
+strategy:
+  type: Recreate
+{{- else }}
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+{{- end }}
+{{- end -}}
+
+{{- /*
+Helper function to generate anti-affinity for components
+*/}}
+{{- define "composer2.podAntiAffinity" -}}
+{{- $component := . -}}
+podAntiAffinity:
+  preferredDuringSchedulingIgnoredDuringExecution:
+  - weight: 100
+    podAffinityTerm:
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/component: {{ $component }}
+      topologyKey: kubernetes.io/hostname
+{{- end -}}
+
+{{- /*
+Helper function to generate common environment variables
+*/}}
+{{- define "composer2.commonEnvVars" -}}
+- name: AIRFLOW_HOME
+  value: "/opt/airflow"
+- name: AIRFLOW__CORE__EXECUTOR
+  value: "CeleryExecutor"
+- name: AIRFLOW__CORE__FERNET_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "composer2.airflowSecretName" . }}
+      key: fernet-key
+- name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "composer2.airflowSecretName" . }}
+      key: airflow-sql-alchemy-conn
+- name: AIRFLOW__CELERY__BROKER_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "composer2.airflowSecretName" . }}
+      key: redis-connection-url
+- name: AIRFLOW__CELERY__RESULT_BACKEND
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "composer2.airflowSecretName" . }}
+      key: airflow-celery-result-backend
+- name: AIRFLOW__CORE__LOAD_EXAMPLES
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "composer2.airflowConfigName" . }}
+      key: AIRFLOW__CORE__LOAD_EXAMPLES
+- name: GOOGLE_APPLICATION_CREDENTIALS
+  value: "/var/secrets/google/gcp-service-account-key.json"
+- name: AIRFLOW_VAR_ENVIRONMENT
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "composer2.airflowConfigName" . }}
+      key: AIRFLOW_VAR_ENVIRONMENT
+- name: AIRFLOW_VAR_GCP_PROJECT
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "composer2.airflowConfigName" . }}
+      key: AIRFLOW_VAR_GCP_PROJECT
+- name: AIRFLOW_VAR_DAG_BUCKET
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "composer2.airflowConfigName" . }}
+      key: AIRFLOW_VAR_DAG_BUCKET
+- name: AIRFLOW_VAR_GCS_BUCKET
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "composer2.airflowConfigName" . }}
+      key: AIRFLOW_VAR_GCS_BUCKET
+- name: AIRFLOW_VAR_REGION
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "composer2.airflowConfigName" . }}
+      key: AIRFLOW_VAR_REGION
+- name: AIRFLOW_VAR_COMPOSER_ENVIRONMENT
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "composer2.airflowConfigName" . }}
+      key: AIRFLOW_VAR_COMPOSER_ENVIRONMENT
+- name: AIRFLOW_VAR_ALERT_EMAIL
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "composer2.airflowConfigName" . }}
+      key: AIRFLOW_VAR_ALERT_EMAIL
+{{- end -}}
+
+{{- /*
+Helper function to generate common volume mounts
+*/}}
+{{- define "composer2.commonVolumeMounts" -}}
+- name: config-volume
+  mountPath: /opt/airflow/config
+  readOnly: true
+- name: secrets-volume
+  mountPath: /opt/airflow/secrets
+  readOnly: true
+- name: dags-volume
+  mountPath: /opt/airflow/dags
+- name: logs-volume
+  mountPath: /opt/airflow/logs
+- name: gcp-service-account
+  mountPath: /var/secrets/google
+  readOnly: true
+{{- end -}}
+
+{{- /*
+Helper function to generate common volumes
+*/}}
+{{- define "composer2.commonVolumes" -}}
+- name: config-volume
+  configMap:
+    name: {{ include "composer2.airflowConfigName" . }}
+- name: secrets-volume
+  secret:
+    secretName: {{ include "composer2.airflowSecretName" . }}
+- name: dags-volume
+  emptyDir: {}
+- name: logs-volume
+  emptyDir: {}
+- name: gcp-service-account
+  secret:
+    secretName: {{ .Values.secrets.gcpServiceAccountSecret | default (printf "%s-gcp-credentials" (include "composer2.fullname" .)) }}
+    items:
+    - key: key.json
+      path: gcp-service-account-key.json
+{{- end -}}
+
+{{- /*
+Webserver Deployment 
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "composer2.webserverName" . }}
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webserver
+spec:
+  replicas: {{ include "composer2.componentReplicas" (list "webserver" .) }}
+  selector:
+    matchLabels:
+      {{- include "composer2.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: webserver
+  {{- include "composer2.deploymentStrategy" "webserver" | nindent 2 }}
+  template:
+    metadata:
+      labels:
+        {{- include "composer2.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: webserver
+      annotations:
+        # Add checksum annotations to trigger rolling updates when config changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "composer2.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | default dict | nindent 8 }}
+      # Init containers to ensure database is ready and DAGs are synced
+      initContainers:
+        # Sync DAGs from GCS bucket
+        - name: dag-sync
+          image: "{{ .Values.initImage.repository }}:{{ include "composer2.airflowImageTag" . }}"
+          imagePullPolicy: {{ .Values.initImage.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              gsutil -m rsync -r gs://{{ include "composer2.dagBucketName" . }}/ /opt/airflow/dags/
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/var/secrets/google/gcp-service-account-key.json"
+          volumeMounts:
+            - name: dags-volume
+              mountPath: /opt/airflow/dags
+            - name: gcp-service-account
+              mountPath: /var/secrets/google
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      containers:
+        - name: webserver
+          securityContext:
+            {{- toYaml .Values.securityContext | default dict | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ include "composer2.airflowImageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - bash
+            - -c
+            - airflow webserver
+          ports:
+            - name: web
+              containerPort: 8080
+              protocol: TCP
+          env:
+            {{- include "composer2.commonEnvVars" . | nindent 12 }}
+            - name: AIRFLOW__WEBSERVER__BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "composer2.airflowConfigName" . }}
+                  key: AIRFLOW__WEBSERVER__BASE_URL
+            - name: AIRFLOW__WEBSERVER__WORKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "composer2.airflowConfigName" . }}
+                  key: AIRFLOW__WEBSERVER__WORKERS
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: web
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 30
+            successThreshold: 1
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: web
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 20
+            successThreshold: 1
+            failureThreshold: 3
+          resources:
+            {{- $env := include "composer2.environment" . }}
+            {{- if eq $env "dev" }}
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+            {{- else if eq $env "qa" }}
+            requests:
+              cpu: 1000m
+              memory: 2Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+            {{- else }}
+            requests:
+              cpu: 2000m
+              memory: 4Gi
+            limits:
+              cpu: 4000m
+              memory: 7.5Gi
+            {{- end }}
+          volumeMounts:
+            {{- include "composer2.commonVolumeMounts" . | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        {{- include "composer2.podAntiAffinity" "webserver" | nindent 8 }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- include "composer2.commonVolumes" . | nindent 8 }}
+
+---
+{{- /*
+Scheduler Deployment 
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "composer2.schedulerName" . }}
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  replicas: {{ include "composer2.componentReplicas" (list "scheduler" .) }}
+  selector:
+    matchLabels:
+      {{- include "composer2.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scheduler
+  {{- include "composer2.deploymentStrategy" "scheduler" | nindent 2 }}
+  template:
+    metadata:
+      labels:
+        {{- include "composer2.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: scheduler
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "composer2.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | default dict | nindent 8 }}
+      # Init containers to ensure database is ready and initialize Airflow if needed
+      initContainers:
+        # Sync DAGs from GCS bucket
+        - name: dag-sync
+          image: "{{ .Values.initImage.repository }}:{{ include "composer2.airflowImageTag" . }}"
+          imagePullPolicy: {{ .Values.initImage.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              gsutil -m rsync -r gs://{{ include "composer2.dagBucketName" . }}/ /opt/airflow/dags/
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/var/secrets/google/gcp-service-account-key.json"
+          volumeMounts:
+            - name: dags-volume
+              mountPath: /opt/airflow/dags
+            - name: gcp-service-account
+              mountPath: /var/secrets/google
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+        # Initialize Airflow database if needed
+        - name: airflow-init
+          image: "{{ .Values.initImage.repository }}:{{ include "composer2.airflowImageTag" . }}"
+          imagePullPolicy: {{ .Values.initImage.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              airflow db check || airflow db init && airflow db upgrade
+          env:
+            {{- include "composer2.commonEnvVars" . | nindent 12 }}
+          volumeMounts:
+            {{- include "composer2.commonVolumeMounts" . | nindent 12 }}
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      containers:
+        - name: scheduler
+          securityContext:
+            {{- toYaml .Values.securityContext | default dict | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ include "composer2.airflowImageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - bash
+            - -c
+            - airflow scheduler
+          env:
+            {{- include "composer2.commonEnvVars" . | nindent 12 }}
+            - name: AIRFLOW__SCHEDULER__PARSING_PROCESSES
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "composer2.airflowConfigName" . }}
+                  key: AIRFLOW__SCHEDULER__PARSING_PROCESSES
+          # Scheduler health check
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - airflow jobs check --job-type SchedulerJob --hostname $(hostname)
+            initialDelaySeconds: 240
+            periodSeconds: 60
+            timeoutSeconds: 30
+            successThreshold: 1
+            failureThreshold: 3
+          resources:
+            {{- $env := include "composer2.environment" . }}
+            {{- if eq $env "dev" }}
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: 1000m
+              memory: 4Gi
+            {{- else if eq $env "qa" }}
+            requests:
+              cpu: 1000m
+              memory: 4Gi
+            limits:
+              cpu: 2000m
+              memory: 8Gi
+            {{- else }}
+            requests:
+              cpu: 2000m
+              memory: 8Gi
+            limits:
+              cpu: 4000m
+              memory: 15Gi
+            {{- end }}
+          volumeMounts:
+            {{- include "composer2.commonVolumeMounts" . | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        {{- include "composer2.podAntiAffinity" "scheduler" | nindent 8 }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- include "composer2.commonVolumes" . | nindent 8 }}
+
+---
+{{- /*
+Worker Deployment 
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "composer2.workerName" . }}
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- $env := include "composer2.environment" . }}
+  {{- if eq $env "dev" }}
+  replicas: 1
+  {{- else if eq $env "qa" }}
+  replicas: 2
+  {{- else }}
+  replicas: 4
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "composer2.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  {{- include "composer2.deploymentStrategy" "worker" | nindent 2 }}
+  template:
+    metadata:
+      labels:
+        {{- include "composer2.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "composer2.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | default dict | nindent 8 }}
+      # Init containers to ensure DAGs are synced
+      initContainers:
+        # Sync DAGs from GCS bucket
+        - name: dag-sync
+          image: "{{ .Values.initImage.repository }}:{{ include "composer2.airflowImageTag" . }}"
+          imagePullPolicy: {{ .Values.initImage.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              gsutil -m rsync -r gs://{{ include "composer2.dagBucketName" . }}/ /opt/airflow/dags/
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/var/secrets/google/gcp-service-account-key.json"
+          volumeMounts:
+            - name: dags-volume
+              mountPath: /opt/airflow/dags
+            - name: gcp-service-account
+              mountPath: /var/secrets/google
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      containers:
+        - name: worker
+          securityContext:
+            {{- toYaml .Values.securityContext | default dict | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ include "composer2.airflowImageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - bash
+            - -c
+            - airflow celery worker
+          env:
+            {{- include "composer2.commonEnvVars" . | nindent 12 }}
+            - name: AIRFLOW__CELERY__WORKER_CONCURRENCY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "composer2.airflowConfigName" . }}
+                  key: AIRFLOW__CELERY__WORKER_CONCURRENCY
+          # Worker health check
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - celery inspect ping -d celery@$(hostname)
+            initialDelaySeconds: 180
+            periodSeconds: 60
+            timeoutSeconds: 30
+            successThreshold: 1
+            failureThreshold: 3
+          resources:
+            {{- if eq $env "dev" }}
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: 1000m
+              memory: 4Gi
+            {{- else if eq $env "qa" }}
+            requests:
+              cpu: 1000m
+              memory: 4Gi
+            limits:
+              cpu: 2000m
+              memory: 8Gi
+            {{- else }}
+            requests:
+              cpu: 2000m
+              memory: 8Gi
+            limits:
+              cpu: 4000m
+              memory: 15Gi
+            {{- end }}
+          volumeMounts:
+            {{- include "composer2.commonVolumeMounts" . | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 30"]
+      terminationGracePeriodSeconds: 120
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        {{- include "composer2.podAntiAffinity" "worker" | nindent 8 }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- include "composer2.commonVolumes" . | nindent 8 }}
+
+{{- /*
+Create HorizontalPodAutoscaler for worker deployment in production and qa environments
+*/}}
+{{- if and .Values.autoscaling.enabled (or (eq (include "composer2.environment" .) "prod") (eq (include "composer2.environment" .) "qa")) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "composer2.workerName" . }}
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "composer2.workerName" . }}
+  {{- $env := include "composer2.environment" . }}
+  {{- if eq $env "dev" }}
+  minReplicas: 1
+  maxReplicas: 3
+  {{- else if eq $env "qa" }}
+  minReplicas: 2
+  maxReplicas: 6
+  {{- else }}
+  minReplicas: 4
+  maxReplicas: 12
+  {{- end }}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 30
+{{- end }}
