@@ -1,0 +1,59 @@
+# This file contains dependencies needed for running the test suite
+# Install with: pip install -r src/test/config/requirements-test.txt
+
+# Core testing frameworks
+pytest>=6.0.0                      # Core testing framework for Python
+pytest-cov>=2.12.0                 # Test coverage reporting for pytest
+pytest-mock>=3.6.0                 # Thin wrapper around the mock package for pytest
+pytest-timeout>=1.4.0              # Plugin to timeout tests after a certain period
+pytest-xdist>=2.3.0                # Distributed testing and loop-on-failing modes
+pytest-asyncio>=0.15.0             # Asynchronous testing with pytest
+pytest-rerunfailures>=10.0         # Re-run flaky tests on failure
+parameterized>=0.8.0               # Parameterized testing with pytest
+
+# Airflow versions for migration testing
+apache-airflow==1.10.15            # Original Airflow version for compatibility testing
+apache-airflow==2.0.0              # Target Airflow version for migration validation
+
+# Airflow providers for 2.x
+apache-airflow-providers-google>=2.0.0     # GCP integration providers for Airflow 2.x
+apache-airflow-providers-http>=2.0.0       # HTTP providers for Airflow 2.x
+apache-airflow-providers-postgres>=2.0.0   # PostgreSQL providers for Airflow 2.x
+
+# Mocking tools
+requests-mock>=1.9.0               # Mock out responses from the requests library
+responses>=0.13.0                  # Utility for mocking out the requests library
+freezegun>=1.1.0                   # Freeze datetime for testing time-dependent code
+
+# Database testing tools
+pytest-postgresql>=3.0.0           # PostgreSQL process fixture for pytest
+pytest-redis>=2.0.0                # Redis process fixture for pytest
+
+# Performance testing
+pytest-benchmark>=3.4.0            # Benchmark tests for performance comparison
+
+# Security testing
+bandit>=1.7.0                      # Security linter for Python code
+safety>=1.10.0                     # Check installed dependencies for known security vulnerabilities
+
+# Docker integration
+pytest-docker>=0.10.0              # Docker container integration for pytest
+docker>=5.0.0                      # Python client for Docker
+
+# GCP integration testing
+google-cloud-storage>=1.42.0       # GCP storage client for testing integration
+google-cloud-secret-manager>=2.8.0 # GCP secret manager client for testing integration
+
+# UI Testing
+selenium>=4.0.0                    # Browser automation for UI testing
+pytest-selenium>=2.0.0             # Selenium integration for pytest
+
+# Utility tools
+deepdiff>=5.5.0                    # Deep difference and search of any Python object
+faker>=8.0.0                       # Generate fake data for testing
+
+# Code quality tools
+black>=21.5b0                      # Code formatter for Python
+pylint>=2.8.0                      # Python code analysis
+mypy>=0.812                        # Static type checker for Python
+flake8>=3.9.0                      # Python code linter
