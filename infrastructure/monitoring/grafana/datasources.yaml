@@ -1,0 +1,53 @@
+apiVersion: 1
+
+# Remove old datasources
+deleteDatasources:
+  - name: Prometheus (Composer 1)
+    orgId: 1
+
+# Configure datasources
+datasources:
+  # Prometheus for metric collection
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus-server:9090
+    isDefault: true
+    version: 1
+    editable: true
+    jsonData:
+      timeInterval: 30s
+      queryTimeout: 120s
+      httpMethod: POST
+
+  # Cloud Logging for centralized logs
+  - name: Cloud Logging
+    type: grafana-googlecloud-logging-datasource
+    access: proxy
+    version: 1
+    editable: true
+    jsonData:
+      authenticationType: gce
+      defaultProject: ${GCP_PROJECT_ID}
+      tokenUri: https://oauth2.googleapis.com/token
+
+  # Cloud Trace for distributed tracing
+  - name: Cloud Trace
+    type: grafana-googlecloud-trace-datasource
+    access: proxy
+    version: 1
+    editable: true
+    jsonData:
+      authenticationType: gce
+      defaultProject: ${GCP_PROJECT_ID}
+
+  # Cloud Monitoring for alerts and GCP metrics
+  - name: Cloud Monitoring
+    type: grafana-googlecloud-monitoring-datasource
+    access: proxy
+    version: 1
+    editable: true
+    jsonData:
+      authenticationType: gce
+      defaultProject: ${GCP_PROJECT_ID}
+      tokenUri: https://oauth2.googleapis.com/token
