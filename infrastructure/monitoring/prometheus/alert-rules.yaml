@@ -1,0 +1,246 @@
+# Prometheus alerting rules for Cloud Composer 2 with Airflow 2.X
+# Version compatibility:
+# - Prometheus: 2.35.0
+# - Alertmanager: 0.24.0
+
+groups:
+  - name: airflow_health
+    rules:
+      - alert: EnvironmentNotHealthy
+        expr: composer_environment_healthy{job="composer-airflow"} < 1
+        for: 1m
+        labels:
+          severity: critical
+          category: infrastructure
+          component: composer
+        annotations:
+          summary: Cloud Composer environment is not healthy
+          description: Cloud Composer environment has been unhealthy for more than 1 minute. Check environment status in GCP Console.
+          runbook_url: https://cloud.google.com/composer/docs/troubleshooting
+
+      - alert: SchedulerNotRunning
+        expr: rate(composer_scheduler_heartbeat{job="composer-scheduler"}[5m]) < 1
+        for: 5m
+        labels:
+          severity: critical
+          category: infrastructure
+          component: scheduler
+        annotations:
+          summary: Airflow scheduler is not running
+          description: Airflow scheduler has not reported a heartbeat for 5 minutes. DAGs will not be scheduled until this is resolved.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshoot-scheduler
+
+      - alert: WebServerDown
+        expr: composer_webserver_health{job="composer-webserver"} < 1
+        for: 3m
+        labels:
+          severity: critical
+          category: infrastructure
+          component: webserver
+        annotations:
+          summary: Airflow webserver is not responding
+          description: Airflow webserver has been unavailable for 3 minutes. UI access and API functionality will be impacted.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshoot-webserver
+
+      - alert: DatabaseConnectionIssues
+        expr: composer_database_health{job="composer-airflow"} < 1
+        for: 2m
+        labels:
+          severity: critical
+          category: infrastructure
+          component: database
+        annotations:
+          summary: Database connection issues detected
+          description: Airflow is experiencing database connectivity issues for 2 minutes. This will affect all Airflow operations.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshoot-database
+
+      - alert: WorkerPodsEvicted
+        expr: increase(composer_worker_pod_evictions{job="composer-worker"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          category: infrastructure
+          component: worker
+        annotations:
+          summary: Worker pods are being evicted
+          description: Airflow worker pods are being evicted, which may indicate resource constraints or node issues.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshoot-workers
+
+  - name: airflow_performance
+    rules:
+      - alert: DAGParsingTooSlow
+        expr: avg_over_time(airflow_dag_processing_duration_seconds{job="composer-dag-processor"}[5m]) > 30
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+          component: dag_processor
+        annotations:
+          summary: DAG parsing time exceeds threshold
+          description: DAG parsing time is exceeding the 30 second threshold, which may delay scheduling of tasks.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/optimize-dags
+
+      - alert: CriticalTaskDurationTooLong
+        expr: airflow_task_duration_seconds{job="composer-airflow", task_id=~"extract|process|load_data"} > 900
+        for: 5m
+        labels:
+          severity: critical
+          category: performance
+          component: task
+        annotations:
+          summary: Critical task duration exceeds threshold
+          description: Critical ETL task has been running for more than 15 minutes, exceeding the expected duration.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/optimize-performance
+
+      - alert: TaskDurationTooLong
+        expr: airflow_task_duration_seconds{job="composer-airflow"} > 600
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+          component: task
+        annotations:
+          summary: Task duration exceeds threshold
+          description: Task has been running for more than 10 minutes, exceeding the expected duration.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/optimize-performance
+
+      - alert: ExcessiveTaskQueueTime
+        expr: airflow_task_queued_duration_seconds{job="composer-airflow"} > 300
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+          component: task
+        annotations:
+          summary: Tasks spending too much time in queue
+          description: Tasks are spending more than 5 minutes in the queue before execution, indicating worker pool capacity issues.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/scale-environments
+
+  - name: airflow_workflows
+    rules:
+      - alert: CriticalDAGFailure
+        expr: increase(airflow_dag_failed_count{job="composer-airflow", dag_id=~"etl_main|data_sync|reports_gen"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: workflow
+          component: dag
+        annotations:
+          summary: Critical DAG has failed
+          description: A business-critical DAG has failed. Immediate attention required.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshoot-dags
+
+      - alert: HighDAGFailureRate
+        expr: sum(increase(airflow_dag_failed_count{job="composer-airflow"}[1h])) > 3
+        for: 5m
+        labels:
+          severity: warning
+          category: workflow
+          component: dag
+        annotations:
+          summary: High rate of DAG failures
+          description: More than 3 DAGs have failed in the last hour, indicating a potential system-wide issue.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshoot-dags
+
+      - alert: RepeatedDAGFailures
+        expr: sum by(dag_id) (increase(airflow_dag_failed_count{job="composer-airflow"}[24h])) > 2
+        for: 10m
+        labels:
+          severity: warning
+          category: workflow
+          component: dag
+        annotations:
+          summary: Repeated failures of the same DAG
+          description: A DAG has failed more than twice in 24 hours, indicating persistent issues with this workflow.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshoot-dags
+
+      - alert: DAGScheduleDelay
+        expr: airflow_dag_schedule_delay_seconds{job="composer-airflow"} > 900
+        for: 5m
+        labels:
+          severity: warning
+          category: workflow
+          component: scheduler
+        annotations:
+          summary: DAG scheduling is delayed
+          description: DAG scheduling is delayed by more than 15 minutes, which may impact workflow timeliness.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshoot-scheduler
+
+  - name: resource_utilization
+    rules:
+      - alert: HighCPUUtilization
+        expr: avg by(component) (composer_cpu_utilization{job=~"composer-.*"}) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          category: resource
+          component: cpu
+        annotations:
+          summary: High CPU utilization
+          description: CPU utilization has been above 80% for 10 minutes. Consider scaling the environment.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/scale-environments
+
+      - alert: HighMemoryUtilization
+        expr: avg by(component) (composer_memory_utilization{job=~"composer-.*"}) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          category: resource
+          component: memory
+        annotations:
+          summary: High memory utilization
+          description: Memory utilization has been above 85% for 10 minutes. Consider scaling the environment.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/scale-environments
+
+      - alert: HighDiskUtilization
+        expr: avg by(component) (composer_disk_utilization{job=~"composer-.*"}) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          category: resource
+          component: disk
+        annotations:
+          summary: High disk utilization
+          description: Disk utilization has been above 90% for 10 minutes. Consider increasing disk size or cleaning up logs.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/optimize-storage
+
+  - name: environment_specific_rules
+    rules:
+      - alert: ProdEnvironmentIssue
+        expr: composer_environment_healthy{job="composer-airflow", environment="prod"} < 1
+        for: 1m
+        labels:
+          severity: critical
+          category: infrastructure
+          component: composer
+          environment: prod
+        annotations:
+          summary: Production environment issue detected
+          description: Critical issue detected in production environment. Immediate attention required.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshooting
+
+      - alert: QAEnvironmentIssue
+        expr: composer_environment_healthy{job="composer-airflow", environment="qa"} < 1
+        for: 5m
+        labels:
+          severity: warning
+          category: infrastructure
+          component: composer
+          environment: qa
+        annotations:
+          summary: QA environment issue detected
+          description: Issue detected in QA environment for more than 5 minutes.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshooting
+
+      - alert: DevEnvironmentIssue
+        expr: composer_environment_healthy{job="composer-airflow", environment="dev"} < 1
+        for: 10m
+        labels:
+          severity: info
+          category: infrastructure
+          component: composer
+          environment: dev
+        annotations:
+          summary: Dev environment issue detected
+          description: Issue detected in development environment for more than 10 minutes.
+          runbook_url: https://cloud.google.com/composer/docs/composer-2/troubleshooting
