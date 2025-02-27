@@ -1,0 +1,327 @@
+# Helm values file for Cloud Composer 2 QA environment
+# This file contains QA-specific configuration values for supplementary components
+
+# Global values shared across all chart components
+global:
+  environment: qa
+  project: composer2-migration-project-qa
+  region: us-central1
+  labels:
+    environment: qa
+    app: airflow
+    project: composer2-migration
+    managed-by: helm
+
+# Cloud Composer 2 environment configuration
+composer:
+  environmentName: composer2-qa
+  airflowVersion: 2.2.5
+  composerVersion: 2.0.25
+  scale:
+    nodeCount: 4
+    scheduler:
+      cpu: 4
+      memoryGb: 15.0
+      storageGb: 30
+      count: 1
+    webServer:
+      cpu: 2
+      memoryGb: 7.5
+      storageGb: 30
+    worker:
+      cpu: 4
+      memoryGb: 15.0
+      storageGb: 75
+      minCount: 3
+      maxCount: 8
+  location: us-central1
+  machineType: n1-standard-4
+  network: composer2-migration-qa-network
+  subnetwork: composer2-migration-qa-subnet
+  cloudSqlMachineType: db-n1-standard-4
+  dagProcessingCount: 3
+
+# Airflow configuration
+airflow:
+  config:
+    core-dags_are_paused_at_creation: "true"
+    core-parallelism: "48"
+    core-dag_concurrency: "24"
+    core-max_active_runs_per_dag: "24"
+    scheduler-parsing_processes: "3"
+    webserver-dag_orientation: "TB"
+    webserver-dag_default_view: "grid"
+    logging-logging_level: "INFO"
+  connections:
+    - id: gcp_conn
+      type: google_cloud_platform
+      description: Connection to GCP services
+      extra:
+        project: composer2-migration-project-qa
+        keyfile_json: ""
+    - id: postgres_db
+      type: postgres
+      description: Connection to QA PostgreSQL database
+      host: composer2-migration-qa-db
+      port: 5432
+      login: airflow
+      password: ""
+      schema: airflow
+  variables:
+    ENV: qa
+    GCP_PROJECT: composer2-migration-project-qa
+    GCS_BUCKET: composer2-migration-qa-bucket
+    ALERT_EMAIL: airflow-alerts-qa@example.com
+  pools:
+    - name: default_pool
+      slots: 96
+      description: "Default pool for tasks that don't specify a pool"
+    - name: etl_pool
+      slots: 24
+      description: Dedicated pool for ETL workflow tasks
+    - name: data_sync_pool
+      slots: 16
+      description: Pool for data synchronization tasks
+    - name: reporting_pool
+      slots: 12
+      description: Pool for report generation tasks
+    - name: high_priority_pool
+      slots: 6
+      description: Reserved pool for critical tasks
+    - name: qa_testing_pool
+      slots: 16
+      description: Dedicated pool for QA automated test workflows
+  dagConcurrency: 24
+  parallelism: 48
+  dagSchedulingInterval: 3m
+  loadExamples: false
+  defaultTimezone: UTC
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 20s
+    alertmanager:
+      enabled: true
+      config:
+        receivers:
+          - name: email-notifications
+            email_configs:
+              - to: airflow-alerts-qa@example.com
+                send_resolved: true
+        route:
+          receiver: email-notifications
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 2h
+    rules:
+      - name: DagFailures
+        rules:
+          - alert: DagFailure
+            expr: airflow_dag_run_status{status="failed"} > 0
+            for: 3m
+            labels:
+              severity: warning
+              environment: qa
+            annotations:
+              summary: Airflow DAG failure
+              description: 'DAG {{ $labels.dag_id }} has failed in the QA environment'
+      - name: TaskDuration
+        rules:
+          - alert: LongRunningTask
+            expr: airflow_task_duration_seconds > 3600
+            for: 10m
+            labels:
+              severity: warning
+              environment: qa
+            annotations:
+              summary: Long running Airflow task
+              description: 'Task {{ $labels.task_id }} in DAG {{ $labels.dag_id }} has been running for over 1 hour'
+      - name: SystemResources
+        rules:
+          - alert: HighCPUUsage
+            expr: avg(rate(container_cpu_usage_seconds_total{container_name!=""}[5m])) by (pod_name) > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              environment: qa
+            annotations:
+              summary: High CPU usage
+              description: 'Pod {{ $labels.pod_name }} has high CPU usage (>80%) for more than 5 minutes'
+  grafana:
+    enabled: true
+    adminPassword: ""
+    persistence:
+      enabled: true
+      size: 10Gi
+    dashboards:
+      airflow:
+        composerOverview: true
+        dagPerformance: true
+        taskPerformance: true
+    datasources:
+      prometheus:
+        name: Prometheus
+        type: prometheus
+        url: http://prometheus-server
+        access: proxy
+    resources:
+      limits:
+        cpu: 750m
+        memory: 1.5Gi
+      requests:
+        cpu: 300m
+        memory: 750Mi
+
+# Storage configuration
+storage:
+  buckets:
+    dags: composer2-migration-qa-dags
+    data: composer2-migration-qa-data
+    logs: composer2-migration-qa-logs
+    backup: composer2-migration-qa-backup
+  bucketLocation: US
+  bucketClass: STANDARD
+  bucketVersioning: true
+  objectLifecycleDays: 60
+  backupEnabled: true
+  backupSchedule: "0 2 * * *"
+
+# Security configuration
+security:
+  serviceAccount: composer2-migration-qa-sa@composer2-migration-project-qa.iam.gserviceaccount.com
+  networkPolicies:
+    enabled: true
+    defaultDenyIngress: false
+    allowInternalTraffic: true
+  webServerAllowIpRanges:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  enablePrivateEnvironment: true
+  enablePrivateEndpoint: false
+  cloudSqlRequireSsl: true
+  enableIap: true
+
+# Resource allocations
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Environment variables
+env:
+  - name: AIRFLOW_ENV
+    value: qa
+  - name: GCP_PROJECT
+    value: composer2-migration-project-qa
+  - name: LOG_LEVEL
+    value: INFO
+  - name: ENABLE_DEBUG
+    value: "false"
+
+# Commands
+command: python -m airflow webserver
+initCommand: python /scripts/init_composer.py
+
+# Service account
+serviceAccount:
+  name: composer2-qa-sa
+  create: false
+
+# Persistence
+persistence:
+  enabled: true
+  size: 10Gi
+
+# DAG synchronization
+dagSync:
+  enabled: true
+  interval: 5m
+  onInit: true
+  source: gs://composer2-migration-qa-dags
+
+# Node selection and affinity
+nodeSelector:
+  cloud.google.com/gke-nodepool: composer-qa-pool
+
+# Tolerations
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: airflow-qa
+    effect: NoSchedule
+
+# Affinity settings
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: cloud.google.com/gke-nodepool
+              operator: In
+              values:
+                - composer-qa-pool
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - airflow
+          topologyKey: kubernetes.io/hostname
+
+# Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Debug settings
+debug:
+  enabled: true
+  verbose: false
+  showConfig: true
+
+# Testing settings
+testing:
+  enabled: true
+  dagTests: true
+  unitTests: true
+  loadExampleDags: false
+
+# Logging
+logging:
+  level: INFO
+  format: json
+  retention: 30d
+
+# High availability
+highAvailability:
+  enabled: true
+  replicaCount: 2
+  distributionStrategy: pod-anti-affinity
+  readinessProbe:
+    initialDelaySeconds: 45
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+  livenessProbe:
+    initialDelaySeconds: 90
+    periodSeconds: 20
+    timeoutSeconds: 8
+    successThreshold: 1
+    failureThreshold: 3
