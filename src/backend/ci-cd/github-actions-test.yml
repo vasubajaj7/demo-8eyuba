@@ -1,0 +1,215 @@
+name: Airflow Migration Test Suite
+
+on:
+  push:
+    branches:
+      - feature/*
+      - bugfix/*
+      - dev
+      - development
+  pull_request:
+    branches:
+      - main
+      - master
+      - release/*
+  workflow_dispatch:  # Manual trigger
+
+env:
+  AIRFLOW_HOME: ${{ github.workspace }}/airflow
+  AIRFLOW_VERSION: 2.0.0
+  PYTHONPATH: ${{ github.workspace }}
+  CI: true
+
+jobs:
+  lint:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.8
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-lint-${{ hashFiles('**/requirements-dev.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r src/backend/requirements-dev.txt
+
+      - name: Run Black formatter check
+        run: black --check src/
+
+      - name: Run Pylint
+        run: pylint src/backend/ src/test/
+
+      - name: Run Flake8
+        run: flake8 src/
+
+      - name: Check for security vulnerabilities
+        run: bandit -r src/backend/dags/ src/backend/plugins/
+
+  validate-dags:
+    name: DAG Validation
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.8
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-validate-${{ hashFiles('**/requirements.txt') }}
+
+      - name: Install Airflow and dependencies
+        run: pip install apache-airflow==${AIRFLOW_VERSION} -r src/backend/requirements.txt
+
+      - name: Validate DAGs
+        run: python src/backend/scripts/validate_dags.py --dag-directory src/backend/dags/ --validation-level WARNING --check-compatibility --output-format json --output-file validation-report.json
+
+      - name: Generate migration compatibility report
+        run: python src/backend/scripts/validate_dags.py --dag-directory src/backend/dags/ --check-compatibility --generate-migration-report --output-file migration-compatibility.html
+
+      - name: Upload validation reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: dag-validation-reports
+          path: '*.json|*.html'
+          retention-days: 7
+
+  unit-tests:
+    name: Unit Tests
+    needs: [validate-dags]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.8
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-unit-tests-${{ hashFiles('**/requirements-test.txt') }}
+
+      - name: Set up Airflow environment
+        run: mkdir -p $AIRFLOW_HOME && cp src/backend/airflow.cfg $AIRFLOW_HOME/
+
+      - name: Run unit tests
+        run: bash src/test/ci/run_unit_tests.sh
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: unit-test-reports
+          path: test-reports/
+          retention-days: 7
+
+  migration-compatibility:
+    name: Migration Compatibility Tests
+    needs: [unit-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.8
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-migration-tests-${{ hashFiles('**/requirements-test.txt') }}
+
+      - name: Set up Airflow 1.10.15 environment
+        run: pip install apache-airflow==1.10.15 && mkdir -p $AIRFLOW_HOME/airflow1 && cp src/backend/airflow.cfg $AIRFLOW_HOME/airflow1/
+
+      - name: Run Airflow 1.10.15 compatibility tests
+        run: AIRFLOW_VERSION=1.10.15 AIRFLOW_HOME=$AIRFLOW_HOME/airflow1 pytest src/test/migration_tests/ -m "airflow1" --junitxml=airflow1-results.xml
+
+      - name: Set up Airflow 2.X environment
+        run: pip install apache-airflow==${AIRFLOW_VERSION} && mkdir -p $AIRFLOW_HOME/airflow2 && cp src/backend/airflow.cfg $AIRFLOW_HOME/airflow2/
+
+      - name: Run Airflow 2.X compatibility tests
+        run: AIRFLOW_HOME=$AIRFLOW_HOME/airflow2 pytest src/test/migration_tests/ -m "airflow2" --junitxml=airflow2-results.xml
+
+      - name: Compare test results
+        run: python src/test/performance_tests/performance_comparison.py --airflow1-results airflow1-results.xml --airflow2-results airflow2-results.xml --output-file migration-comparison.html
+
+      - name: Upload comparison report
+        uses: actions/upload-artifact@v3
+        with:
+          name: migration-comparison-report
+          path: migration-comparison.html
+          retention-days: 7
+
+  integration-tests:
+    name: Integration Tests
+    needs: [unit-tests]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.8
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v2
+
+      - name: Start PostgreSQL
+        run: docker run -d --name postgres -e POSTGRES_PASSWORD=airflow -e POSTGRES_USER=airflow -e POSTGRES_DB=airflow -p 5432:5432 postgres:13
+
+      - name: Start Redis
+        run: docker run -d --name redis -p 6379:6379 redis:6
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-integration-tests-${{ hashFiles('**/requirements-test.txt') }}
+
+      - name: Run integration tests
+        run: bash src/test/ci/run_integration_tests.sh
+        env:
+          GCP_PROJECT_ID: composer-migration-test
+          CI_BUILD_ID: ${{ github.run_id }}
+
+      - name: Upload integration test reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: integration-test-reports
+          path: integration-test-reports/
+          retention-days: 7
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
