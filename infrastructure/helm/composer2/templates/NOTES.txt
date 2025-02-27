@@ -1,0 +1,139 @@
+===============================================================
+  CLOUD COMPOSER 2 MIGRATION - AIRFLOW 2.X
+===============================================================
+
+Thank you for installing {{ .Chart.Name }} chart version {{ .Chart.Version }}.
+This deployment provides supplementary components for Cloud Composer 2 with 
+Airflow {{ .Values.composer.airflowVersion }}.
+
+ENVIRONMENT INFORMATION:
+-----------------------
+Current environment: {{ include "composer2.environment" . }}
+Airflow version: {{ .Values.composer.airflowVersion }}
+Composer version: {{ .Values.composer.composerVersion }}
+
+{{- if eq (include "composer2.environment" .) "dev" }}
+Development Environment - For testing and development purposes only
+{{- else if eq (include "composer2.environment" .) "qa" }}
+QA Environment - For validation and testing
+{{- else if eq (include "composer2.environment" .) "prod" }}
+Production Environment - CRITICAL SYSTEM - Change procedures must be followed
+{{- end }}
+
+ACCESS INFORMATION:
+------------------
+{{- if eq (include "composer2.environment" .) "dev" }}
+To access the Airflow UI (Development):
+  kubectl port-forward svc/{{ include "composer2.webserverName" . }} 8080:8080 -n {{ .Release.Namespace }}
+  Then open: http://localhost:8080
+
+API Endpoint (Development):
+  kubectl port-forward svc/{{ include "composer2.webserverName" . }} 8080:8080 -n {{ .Release.Namespace }}
+  Then use: http://localhost:8080/api/v1/
+{{- else if eq (include "composer2.environment" .) "qa" }}
+To access the Airflow UI (QA):
+  Access through internal gateway at: https://airflow-qa.internal.example.com
+  Or via kubectl port-forward:
+  kubectl port-forward svc/{{ include "composer2.webserverName" . }} 8080:8080 -n {{ .Release.Namespace }}
+
+API Endpoint (QA):
+  https://airflow-qa.internal.example.com/api/v1/
+{{- else if eq (include "composer2.environment" .) "prod" }}
+To access the Airflow UI (Production):
+  Access through IAP at: https://airflow.example.com
+  Authentication required
+
+API Endpoint (Production):
+  https://airflow.example.com/api/v1/
+  JWT Bearer authentication required
+{{- end }}
+
+HELPFUL COMMANDS:
+----------------
+# View pods
+kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+# Check pod logs
+kubectl logs -n {{ .Release.Namespace }} deployment/{{ include "composer2.webserverName" . }}
+
+# Check DAG status
+kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "composer2.webserverName" . }} -- airflow dags list
+
+# DAG Management Commands
+kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "composer2.webserverName" . }} -- airflow dags trigger [dag_id]
+kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "composer2.webserverName" . }} -- airflow dags pause [dag_id]
+kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "composer2.webserverName" . }} -- airflow dags unpause [dag_id]
+
+# Task Management
+kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "composer2.webserverName" . }} -- airflow tasks test [dag_id] [task_id] [date]
+
+MONITORING:
+----------
+{{- if eq (include "composer2.environment" .) "dev" }}
+Metrics (Development):
+  Prometheus: http://prometheus-server.{{ .Release.Namespace }}.svc.cluster.local
+  Grafana: http://grafana.{{ .Release.Namespace }}.svc.cluster.local (admin/admin)
+{{- else if eq (include "composer2.environment" .) "qa" }}
+Metrics (QA):
+  Prometheus: https://prometheus-qa.internal.example.com
+  Grafana: https://grafana-qa.internal.example.com
+{{- else if eq (include "composer2.environment" .) "prod" }}
+Metrics (Production):
+  Production monitoring available at: https://monitoring.example.com
+  Alerts configured to notify operations team
+{{- end }}
+
+ENVIRONMENT SPECIFICATIONS:
+-------------------------
+{{- if eq (include "composer2.environment" .) "dev" }}
+Development Resources:
+  Light resources allocated for development use
+  Scheduler count: 1
+  Autoscaling disabled
+  Node Count: {{ .Values.composer.scale.nodeCount }}
+  Worker Scaling: Min {{ .Values.composer.scale.worker.minCount }} / Max {{ .Values.composer.scale.worker.maxCount }}
+{{- else if eq (include "composer2.environment" .) "qa" }}
+QA Resources:
+  Medium resources allocated for testing
+  Scheduler count: 1
+  Limited autoscaling enabled
+  Node Count: {{ .Values.composer.scale.nodeCount }}
+  Worker Scaling: Min {{ .Values.composer.scale.worker.minCount }} / Max {{ .Values.composer.scale.worker.maxCount }}
+{{- else if eq (include "composer2.environment" .) "prod" }}
+Production Resources:
+  Full production resources allocated
+  Scheduler count: 2 (HA configuration)
+  Autoscaling fully enabled
+  Node Count: {{ .Values.composer.scale.nodeCount }}
+  Worker Scaling: Min {{ .Values.composer.scale.worker.minCount }} / Max {{ .Values.composer.scale.worker.maxCount }}
+{{- end }}
+
+TROUBLESHOOTING:
+--------------
+# Check Airflow component status
+gcloud composer environments describe {{ .Values.composer.environmentName }} --location {{ .Values.composer.location }}
+
+{{- if eq (include "composer2.environment" .) "dev" }}
+Development Support:
+  For issues, contact the development team
+  Slack: #airflow-dev-support
+{{- else if eq (include "composer2.environment" .) "qa" }}
+QA Support:
+  For issues, contact QA team and DevOps
+  Slack: #airflow-qa-support
+  Email: airflow-qa@example.com
+{{- else if eq (include "composer2.environment" .) "prod" }}
+Production Support:
+  For CRITICAL issues: Call On-Call Engineer at (555) 123-4567
+  Slack: #airflow-prod-support
+  Email: airflow-support@example.com
+{{- end }}
+
+DOCUMENTATION:
+------------
+Migration Guide: https://example.com/docs/migration-guide
+Airflow 2.X Documentation: https://airflow.apache.org/docs/apache-airflow/{{ .Values.composer.airflowVersion }}/
+Cloud Composer 2 Documentation: https://cloud.google.com/composer/docs
+
+--------------------------------------------------
+Cloud Composer 2 Migration Project - © Example Organization {{ now | date "2006" }}
