@@ -1,0 +1,35 @@
+apiVersion: v2
+name: composer2
+description: A Helm chart for deploying supplementary components alongside Cloud Composer 2 with Airflow 2.X
+type: application
+version: 0.1.0
+appVersion: 2.2.5
+kubeVersion: >=1.20.0
+keywords:
+  - airflow
+  - composer
+  - workflow
+  - scheduling
+home: https://github.com/your-org/composer2-migration
+sources:
+  - https://github.com/your-org/composer2-migration
+maintainers:
+  - name: DevOps Team
+    email: devops@example.com
+dependencies:
+  - name: prometheus
+    version: 15.10.1
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: monitoring.prometheus.enabled
+  - name: grafana
+    version: 6.32.2
+    repository: https://grafana.github.io/helm-charts
+    condition: monitoring.grafana.enabled
+  - name: redis
+    version: 17.0.0
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+annotations:
+  artifacthub.io/links: |
+    [{"name":"Airflow Documentation","url":"https://airflow.apache.org/docs/apache-airflow/2.2.5/"},{"name":"Cloud Composer Documentation","url":"https://cloud.google.com/composer"}]
+  artifacthub.io/prerelease: "true"
