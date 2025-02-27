@@ -1,0 +1,394 @@
+# Production environment values for Cloud Composer 2 with Airflow 2.X
+# This file defines production-specific configuration values for supplementary components
+
+# Global configuration values shared across all chart components
+global:
+  environment: prod
+  project: composer2-migration-project-prod
+  region: us-central1
+  labels:
+    environment: prod
+    app: airflow
+    project: composer2-migration
+    managed-by: helm
+    criticality: high
+
+# Cloud Composer 2 environment configuration
+composer:
+  environmentName: composer2-prod
+  airflowVersion: 2.2.5
+  composerVersion: 2.0.25
+  scale:
+    nodeCount: 6
+    scheduler:
+      cpu: 8
+      memoryGb: 30.0
+      storageGb: 50
+      count: 2
+    webServer:
+      cpu: 4
+      memoryGb: 15.0
+      storageGb: 50
+    worker:
+      cpu: 8
+      memoryGb: 30.0
+      storageGb: 100
+      minCount: 5
+      maxCount: 15
+  location: us-central1
+  machineType: n1-standard-8
+  network: composer2-migration-prod-network
+  subnetwork: composer2-migration-prod-subnet
+  cloudSqlMachineType: db-n1-standard-8
+  dagProcessingCount: 4
+  maintenanceWindow:
+    startTime: 2023-01-01T02:00:00Z
+    endTime: 2023-01-01T06:00:00Z
+    recurrence: FREQ=WEEKLY;BYDAY=SU
+
+# Airflow-specific configuration
+airflow:
+  config:
+    core-dags_are_paused_at_creation: "true"
+    core-parallelism: "96"
+    core-dag_concurrency: "48"
+    core-max_active_runs_per_dag: "32"
+    core-secure_mode: "true"
+    scheduler-parsing_processes: "4"
+    webserver-dag_orientation: TB
+    webserver-dag_default_view: grid
+    logging-logging_level: WARNING
+  connections:
+    - id: gcp_conn
+      type: google_cloud_platform
+      description: Connection to GCP services
+      extra:
+        project: composer2-migration-project-prod
+        keyfile_json: ""
+    - id: postgres_db
+      type: postgres
+      description: Connection to production PostgreSQL database
+      host: composer2-migration-prod-db
+      port: 5432
+      login: airflow
+      password: ""
+      schema: airflow
+  variables:
+    ENV: prod
+    GCP_PROJECT: composer2-migration-project-prod
+    GCS_BUCKET: composer2-migration-prod-bucket
+    ALERT_EMAIL: airflow-alerts-prod@example.com
+  pools:
+    - name: default_pool
+      slots: 128
+      description: "Default pool for tasks that don't specify a pool"
+    - name: etl_pool
+      slots: 32
+      description: Dedicated pool for ETL workflow tasks
+    - name: data_sync_pool
+      slots: 24
+      description: Pool for data synchronization tasks
+    - name: reporting_pool
+      slots: 16
+      description: Pool for report generation tasks
+    - name: high_priority_pool
+      slots: 8
+      description: Reserved pool for critical tasks
+    - name: production_only_pool
+      slots: 16
+      description: Pool for production-specific workflow tasks
+  dagConcurrency: 48
+  parallelism: 96
+  dagSchedulingInterval: 2m
+  loadExamples: false
+  defaultTimezone: UTC
+
+# Monitoring and observability configuration
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 15s
+    alertmanager:
+      enabled: true
+      config:
+        receivers:
+          - name: email-notifications
+            email_configs:
+              - to: airflow-alerts-prod@example.com
+                send_resolved: true
+          - name: pagerduty
+            pagerduty_configs:
+              - service_key: ""
+                send_resolved: true
+        route:
+          receiver: email-notifications
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 1h
+          routes:
+            - match:
+                severity: critical
+              receiver: pagerduty
+    rules:
+      - name: DagFailures
+        rules:
+          - alert: DagFailure
+            expr: airflow_dag_run_status{status="failed"} > 0
+            for: 1m
+            labels:
+              severity: critical
+              environment: prod
+            annotations:
+              summary: Airflow DAG failure
+              description: DAG {{ $labels.dag_id }} has failed in the PRODUCTION environment
+      - name: TaskDuration
+        rules:
+          - alert: LongRunningTask
+            expr: airflow_task_duration_seconds > 3600
+            for: 5m
+            labels:
+              severity: warning
+              environment: prod
+            annotations:
+              summary: Long running Airflow task
+              description: Task {{ $labels.task_id }} in DAG {{ $labels.dag_id }} has been running for over 1 hour
+      - name: SystemResources
+        rules:
+          - alert: HighCPUUsage
+            expr: avg(rate(container_cpu_usage_seconds_total{container_name!=""}[5m])) by (pod_name) > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              environment: prod
+            annotations:
+              summary: High CPU usage
+              description: Pod {{ $labels.pod_name }} has high CPU usage (>80%) for more than 5 minutes
+          - alert: HighMemoryUsage
+            expr: avg(container_memory_usage_bytes{container_name!=""}) by (pod_name) / avg(container_spec_memory_limit_bytes{container_name!=""}) by (pod_name) > 0.85
+            for: 5m
+            labels:
+              severity: warning
+              environment: prod
+            annotations:
+              summary: High memory usage
+              description: Pod {{ $labels.pod_name }} has high memory usage (>85%) for more than 5 minutes
+          - alert: SystemDiskSpace
+            expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.1
+            for: 5m
+            labels:
+              severity: critical
+              environment: prod
+            annotations:
+              summary: Low disk space
+              description: Node {{ $labels.instance }} has less than 10% available disk space
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  grafana:
+    enabled: true
+    adminPassword: ""
+    persistence:
+      enabled: true
+      size: 20Gi
+    dashboards:
+      airflow:
+        composerOverview: true
+        dagPerformance: true
+        taskPerformance: true
+    datasources:
+      prometheus:
+        name: Prometheus
+        type: prometheus
+        url: http://prometheus-server
+        access: proxy
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+
+# Storage configuration
+storage:
+  buckets:
+    dags: composer2-migration-prod-dags
+    data: composer2-migration-prod-data
+    logs: composer2-migration-prod-logs
+    backup: composer2-migration-prod-backup
+  bucketLocation: US
+  bucketClass: STANDARD
+  bucketVersioning: true
+  objectLifecycleDays: 90
+  backupEnabled: true
+  backupSchedule: "0 1 * * *"
+  disasterRecoveryEnabled: true
+  crossRegionReplication: true
+  retentionPolicy:
+    enabled: true
+    retentionPeriodDays: 365
+
+# Security configuration
+security:
+  serviceAccount: composer2-migration-prod-sa@composer2-migration-project-prod.iam.gserviceaccount.com
+  networkPolicies:
+    enabled: true
+    defaultDenyIngress: true
+    allowInternalTraffic: true
+  webServerAllowIpRanges:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  enablePrivateEnvironment: true
+  enablePrivateEndpoint: true
+  cloudSqlRequireSsl: true
+  enableIap: true
+  enableCmek: true
+  kmsKeyId: projects/composer2-migration-project-prod/locations/us-central1/keyRings/composer-keyring/cryptoKeys/composer-key
+  secretManagerPrefix: composer2-prod
+  secretRotationPeriod: 8760h
+  auditLogRetentionDays: 365
+  vpcServiceControls:
+    enabled: true
+    servicePerimeter: composer2_prod_perimeter
+
+# Resource allocations for components
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 1000m
+    memory: 2Gi
+
+# Additional configuration
+env:
+  - name: AIRFLOW_ENV
+    value: prod
+  - name: GCP_PROJECT
+    value: composer2-migration-project-prod
+  - name: LOG_LEVEL
+    value: WARNING
+  - name: ENABLE_DEBUG
+    value: "false"
+
+# Component-specific commands
+command: python -m airflow webserver
+initCommand: python /scripts/init_composer.py
+
+# Service account configuration
+serviceAccount:
+  name: composer2-prod-sa
+  create: false
+
+# Persistent storage configuration
+persistence:
+  enabled: true
+  size: 50Gi
+
+# DAG synchronization configuration
+dagSync:
+  enabled: true
+  interval: 3m
+  onInit: true
+  source: gs://composer2-migration-prod-dags
+
+# Node assignment configuration
+nodeSelector:
+  cloud.google.com/gke-nodepool: composer-prod-pool
+
+# Toleration configuration
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: airflow-prod
+    effect: NoSchedule
+
+# Affinity configuration
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: cloud.google.com/gke-nodepool
+              operator: In
+              values:
+                - composer-prod-pool
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app
+              operator: In
+              values:
+                - airflow
+        topologyKey: kubernetes.io/hostname
+
+# Autoscaling configuration
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 75
+
+# Debug configuration
+debug:
+  enabled: false
+  verbose: false
+  showConfig: false
+
+# Testing configuration
+testing:
+  enabled: false
+  dagTests: false
+  unitTests: false
+  loadExampleDags: false
+
+# Logging configuration
+logging:
+  level: WARNING
+  format: json
+  retention: 90d
+  handlers:
+    - console
+    - file
+    - stackdriver
+
+# High availability configuration
+highAvailability:
+  enabled: true
+  replicaCount: 3
+  distributionStrategy: pod-anti-affinity
+  readinessProbe:
+    initialDelaySeconds: 60
+    periodSeconds: 15
+    timeoutSeconds: 8
+    successThreshold: 1
+    failureThreshold: 3
+  livenessProbe:
+    initialDelaySeconds: 120
+    periodSeconds: 30
+    timeoutSeconds: 10
+    successThreshold: 1
+    failureThreshold: 3
+
+# Disaster recovery configuration
+disasterRecovery:
+  enabled: true
+  backupSchedule: "0 1 * * *"
+  retentionDays: 30
+  crossRegionReplication: true
+  secondaryRegion: us-east1
+
+# Pod Disruption Budget
+pdb:
+  enabled: true
+  minAvailable: 2
