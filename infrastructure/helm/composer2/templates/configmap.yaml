@@ -1,0 +1,204 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "composer2.airflowConfigName" . }}
+  labels:
+    {{- include "composer2.labels" . | nindent 4 }}
+  {{- with .Values.configMap.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{- $env := include "composer2.environment" . }}
+  
+  # Core Airflow environment variables for Airflow 2.X migration
+  AIRFLOW__CORE__EXECUTOR: "{{ .Values.airflow.executor | default "CeleryExecutor" }}"
+  AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/dags"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "{{ if eq $env "dev" }}{{ .Values.airflow.loadExamples | default "true" }}{{ else }}false{{ end }}"
+  
+  # Migration-specific settings for Airflow 2.X
+  # These settings are crucial for seamless migration from 1.10.15 to 2.X
+  AIRFLOW__CORE__LAZY_LOAD_PLUGINS: "{{ .Values.airflow.lazyLoadPlugins | default "true" }}"
+  AIRFLOW__CORE__STORE_DAG_CODE: "{{ .Values.airflow.storeDagCode | default "true" }}"
+  AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "{{ .Values.airflow.storeSerializedDags | default "true" }}"
+  AIRFLOW__CORE__MIN_SERIALIZED_DAG_UPDATE_INTERVAL: "{{ .Values.airflow.minSerializedDagUpdateInterval | default "30" }}"
+  AIRFLOW__CORE__ENABLE_XCOM_PICKLING: "{{ .Values.airflow.enableXcomPickling | default "true" }}"
+  AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "{{ .Values.airflow.dagbagImportTimeout | default "30" }}"
+  AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: "{{ .Values.airflow.dagFileProcessorTimeout | default "50" }}"
+  AIRFLOW__CORE__DEFAULT_TIMEZONE: "{{ .Values.airflow.timezone | default "UTC" }}"
+  
+  # Environment-specific settings
+  {{- if eq $env "dev" }}
+  AIRFLOW__CORE__PARALLELISM: "{{ .Values.airflow.dev.parallelism | default "32" }}"
+  AIRFLOW__CORE__DAG_CONCURRENCY: "{{ .Values.airflow.dev.dagConcurrency | default "16" }}"
+  AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "{{ .Values.airflow.dev.maxActiveRunsPerDag | default "16" }}"
+  AIRFLOW__SCHEDULER__PARSING_PROCESSES: "{{ .Values.airflow.dev.parsingProcesses | default "4" }}"
+  AIRFLOW__WEBSERVER__WORKERS: "{{ .Values.airflow.dev.webserverWorkers | default "4" }}"
+  AIRFLOW__CELERY__WORKER_CONCURRENCY: "{{ .Values.airflow.dev.workerConcurrency | default "16" }}"
+  AIRFLOW__LOGGING__LOGGING_LEVEL: "{{ .Values.airflow.dev.loggingLevel | default "INFO" }}"
+  AIRFLOW__WEBSERVER__NAVBAR_COLOR: "{{ .Values.airflow.dev.navbarColor | default "#4285F4" }}"
+  LOG_LEVEL: "{{ .Values.airflow.dev.logLevel | default "INFO" }}"
+  {{- else if eq $env "qa" }}
+  AIRFLOW__CORE__PARALLELISM: "{{ .Values.airflow.qa.parallelism | default "64" }}"
+  AIRFLOW__CORE__DAG_CONCURRENCY: "{{ .Values.airflow.qa.dagConcurrency | default "32" }}"
+  AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "{{ .Values.airflow.qa.maxActiveRunsPerDag | default "24" }}"
+  AIRFLOW__SCHEDULER__PARSING_PROCESSES: "{{ .Values.airflow.qa.parsingProcesses | default "8" }}"
+  AIRFLOW__WEBSERVER__WORKERS: "{{ .Values.airflow.qa.webserverWorkers | default "8" }}"
+  AIRFLOW__CELERY__WORKER_CONCURRENCY: "{{ .Values.airflow.qa.workerConcurrency | default "32" }}"
+  AIRFLOW__LOGGING__LOGGING_LEVEL: "{{ .Values.airflow.qa.loggingLevel | default "INFO" }}"
+  AIRFLOW__WEBSERVER__NAVBAR_COLOR: "{{ .Values.airflow.qa.navbarColor | default "#FBBC05" }}"
+  LOG_LEVEL: "{{ .Values.airflow.qa.logLevel | default "INFO" }}"
+  {{- else }}  # Production by default
+  AIRFLOW__CORE__PARALLELISM: "{{ .Values.airflow.prod.parallelism | default "96" }}"
+  AIRFLOW__CORE__DAG_CONCURRENCY: "{{ .Values.airflow.prod.dagConcurrency | default "48" }}"
+  AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "{{ .Values.airflow.prod.maxActiveRunsPerDag | default "32" }}"
+  AIRFLOW__SCHEDULER__PARSING_PROCESSES: "{{ .Values.airflow.prod.parsingProcesses | default "12" }}"
+  AIRFLOW__WEBSERVER__WORKERS: "{{ .Values.airflow.prod.webserverWorkers | default "16" }}"
+  AIRFLOW__CELERY__WORKER_CONCURRENCY: "{{ .Values.airflow.prod.workerConcurrency | default "64" }}"
+  AIRFLOW__LOGGING__LOGGING_LEVEL: "{{ .Values.airflow.prod.loggingLevel | default "WARNING" }}"
+  AIRFLOW__WEBSERVER__NAVBAR_COLOR: "{{ .Values.airflow.prod.navbarColor | default "#EA4335" }}"
+  LOG_LEVEL: "{{ .Values.airflow.prod.logLevel | default "WARNING" }}"
+  {{- end }}
+  
+  # Database settings
+  AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: "{{ .Values.airflow.database.poolSize | default "20" }}"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: "{{ .Values.airflow.database.maxOverflow | default "10" }}"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "{{ .Values.airflow.database.poolRecycle | default "1800" }}"
+  
+  # Webserver configuration
+  AIRFLOW__WEBSERVER__DAG_DEFAULT_VIEW: "grid"  # New in Airflow 2.X (was 'tree' in 1.X)
+  AIRFLOW__WEBSERVER__DAG_ORIENTATION: "TB"
+  AIRFLOW__WEBSERVER__WEB_SERVER_NAME: "{{ .Values.airflow.webserverName | default "airflow" }}"
+  AIRFLOW__WEBSERVER__BASE_URL: "{{ .Values.airflow.baseUrl | default "http://localhost:8080" }}"
+  AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: "{{ .Values.airflow.enableProxyFix | default "true" }}"
+  
+  # API settings (enhanced in Airflow 2.X)
+  AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+  
+  # Paths and home
+  AIRFLOW_HOME: "/opt/airflow"
+  PYTHONPATH: "/opt/airflow"
+  DAGS_FOLDER: "/opt/airflow/dags"
+  
+  # Google Cloud variables
+  AIRFLOW_VAR_ENVIRONMENT: "{{ $env }}"
+  AIRFLOW_VAR_GCP_PROJECT: "{{ .Values.global.project | default (printf "composer2-%s" $env) }}"
+  AIRFLOW_VAR_DAG_BUCKET: "{{ include "composer2.dagBucketName" . }}"
+  AIRFLOW_VAR_GCS_BUCKET: "{{ .Values.storage.buckets.data | default (printf "composer2-data-%s" $env) }}"
+  AIRFLOW_VAR_REGION: "{{ .Values.global.region | default "us-central1" }}"
+  AIRFLOW_VAR_COMPOSER_ENVIRONMENT: "{{ .Values.global.composerEnvironment | default (printf "composer2-%s" $env) }}"
+  AIRFLOW_VAR_ALERT_EMAIL: "{{ index .Values.alertEmails $env | default "airflow-alerts@example.com" }}"
+  
+  # Google credentials path
+  GOOGLE_APPLICATION_CREDENTIALS: "/var/secrets/google/gcp-service-account-key.json"
+  
+  # Main Airflow configuration file
+  airflow.cfg: |
+    [core]
+    executor = {{ .Values.airflow.executor | default "CeleryExecutor" }}
+    dags_folder = /opt/airflow/dags
+    load_examples = {{ if eq $env "dev" }}{{ .Values.airflow.loadExamples | default "True" }}{{ else }}False{{ end }}
+    
+    {{- if eq $env "dev" }}
+    parallelism = {{ .Values.airflow.dev.parallelism | default 32 }}
+    dag_concurrency = {{ .Values.airflow.dev.dagConcurrency | default 16 }}
+    max_active_runs_per_dag = {{ .Values.airflow.dev.maxActiveRunsPerDag | default 16 }}
+    {{- else if eq $env "qa" }}
+    parallelism = {{ .Values.airflow.qa.parallelism | default 64 }}
+    dag_concurrency = {{ .Values.airflow.qa.dagConcurrency | default 32 }}
+    max_active_runs_per_dag = {{ .Values.airflow.qa.maxActiveRunsPerDag | default 24 }}
+    {{- else }}
+    parallelism = {{ .Values.airflow.prod.parallelism | default 96 }}
+    dag_concurrency = {{ .Values.airflow.prod.dagConcurrency | default 48 }}
+    max_active_runs_per_dag = {{ .Values.airflow.prod.maxActiveRunsPerDag | default 32 }}
+    {{- end }}
+    
+    # Airflow 2.X features (critical for migration)
+    lazy_load_plugins = {{ .Values.airflow.lazyLoadPlugins | default "True" }}
+    store_dag_code = {{ .Values.airflow.storeDagCode | default "True" }}
+    store_serialized_dags = {{ .Values.airflow.storeSerializedDags | default "True" }}
+    min_serialized_dag_update_interval = {{ .Values.airflow.minSerializedDagUpdateInterval | default 30 }}
+    dagbag_import_timeout = {{ .Values.airflow.dagbagImportTimeout | default 30 }}
+    dag_file_processor_timeout = {{ .Values.airflow.dagFileProcessorTimeout | default 50 }}
+    default_timezone = {{ .Values.airflow.timezone | default "UTC" }}
+    enable_xcom_pickling = {{ .Values.airflow.enableXcomPickling | default "True" }}
+    
+    [database]
+    sql_alchemy_pool_size = {{ .Values.airflow.database.poolSize | default 20 }}
+    sql_alchemy_max_overflow = {{ .Values.airflow.database.maxOverflow | default 10 }}
+    sql_alchemy_pool_recycle = {{ .Values.airflow.database.poolRecycle | default 1800 }}
+    sql_alchemy_conn = {{ include "composer2.airflowDatabaseUrl" . }}
+    
+    [scheduler]
+    {{- if eq $env "dev" }}
+    parsing_processes = {{ .Values.airflow.dev.parsingProcesses | default 4 }}
+    {{- else if eq $env "qa" }}
+    parsing_processes = {{ .Values.airflow.qa.parsingProcesses | default 8 }}
+    {{- else }}
+    parsing_processes = {{ .Values.airflow.prod.parsingProcesses | default 12 }}
+    {{- end }}
+    
+    # New Scheduler features in Airflow 2.X
+    use_job_schedule = True
+    job_heartbeat_sec = 5
+    scheduler_heartbeat_sec = 5
+    
+    [webserver]
+    dag_default_view = grid
+    dag_orientation = TB
+    web_server_name = {{ .Values.airflow.webserverName | default "airflow" }}
+    base_url = {{ .Values.airflow.baseUrl | default "http://localhost:8080" }}
+    enable_proxy_fix = {{ .Values.airflow.enableProxyFix | default "True" }}
+    
+    {{- if eq $env "dev" }}
+    navbar_color = {{ .Values.airflow.dev.navbarColor | default "#4285F4" }}
+    workers = {{ .Values.airflow.dev.webserverWorkers | default 4 }}
+    {{- else if eq $env "qa" }}
+    navbar_color = {{ .Values.airflow.qa.navbarColor | default "#FBBC05" }}
+    workers = {{ .Values.airflow.qa.webserverWorkers | default 8 }}
+    {{- else }}
+    navbar_color = {{ .Values.airflow.prod.navbarColor | default "#EA4335" }}
+    workers = {{ .Values.airflow.prod.webserverWorkers | default 16 }}
+    {{- end }}
+    
+    [api]
+    auth_backends = airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+    
+    [celery]
+    {{- if eq $env "dev" }}
+    worker_concurrency = {{ .Values.airflow.dev.workerConcurrency | default 16 }}
+    {{- else if eq $env "qa" }}
+    worker_concurrency = {{ .Values.airflow.qa.workerConcurrency | default 32 }}
+    {{- else }}
+    worker_concurrency = {{ .Values.airflow.prod.workerConcurrency | default 64 }}
+    {{- end }}
+    broker_url = {{ include "composer2.redisUrl" . }}
+    result_backend = {{ include "composer2.redisUrl" . }}
+    
+    [logging]
+    {{- if eq $env "dev" }}
+    logging_level = {{ .Values.airflow.dev.loggingLevel | default "INFO" }}
+    {{- else if eq $env "qa" }}
+    logging_level = {{ .Values.airflow.qa.loggingLevel | default "INFO" }}
+    {{- else }}
+    logging_level = {{ .Values.airflow.prod.loggingLevel | default "WARNING" }}
+    {{- end }}
+    
+    # Google Cloud Storage logging (recommended for Cloud Composer 2)
+    remote_logging = True
+    remote_base_log_folder = gs://{{ include "composer2.dagBucketName" . }}/logs
+    remote_log_conn_id = google_cloud_default
+    
+    [secrets]
+    backend = airflow.providers.google.cloud.secrets.secret_manager.CloudSecretManagerBackend
+    backend_kwargs = {"project_id": "{{ .Values.global.project | default (printf "composer2-%s" $env) }}"}
+    
+    [kubernetes]
+    # Kubernetes settings (useful for KubernetesExecutor or KubernetesPodOperator)
+    namespace = {{ .Release.Namespace }}
+    in_cluster = True
+    gcp_service_account_keys = /var/secrets/google/gcp-service-account-key.json
+    
+    # Provider settings (important for GCP integration in Airflow 2.X)
+    [providers]
+    packages_file = /opt/airflow/provider_requirements.txt
