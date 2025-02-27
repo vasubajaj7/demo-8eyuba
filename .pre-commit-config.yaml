@@ -1,0 +1,93 @@
+# Pre-commit configuration for Apache Airflow migration from 1.10.15 to 2.X
+# Enforces code quality, standards, and security checks during development
+
+repos:
+  # Standard pre-commit hooks for basic file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+      - id: check-ast
+      - id: debug-statements
+      - id: check-docstring-first
+      - id: check-merge-conflict
+
+  # Python code formatter (pre-commit v3.3.2)
+  - repo: https://github.com/psf/black
+    rev: 23.3.0
+    hooks:
+      - id: black
+        args: ["--line-length=88", "--target-version=py38"]
+        
+  # Import sorting (isort v5.12.0)
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args: ["--profile=black", "--line-length=88"]
+        
+  # Python linter (flake8 v6.0.0)
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args: ["--max-line-length=88"]
+        additional_dependencies:
+          - flake8-docstrings==1.7.0
+          - flake8-bugbear==23.5.9
+          
+  # Static type checking (mypy v1.3.0)
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.3.0
+    hooks:
+      - id: mypy
+        args: ["--python-version=3.8", "--warn-return-any"]
+        additional_dependencies:
+          - types-requests
+          - types-PyYAML
+          
+  # Security linting (bandit v1.7.5)
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: ["-r", "-c", "bandit.yaml"]
+        exclude: tests/
+        
+  # Python linter with Airflow-specific checks (pylint v2.17.4)
+  - repo: https://github.com/PyCQA/pylint
+    rev: v2.17.4
+    hooks:
+      - id: pylint
+        args: ["--rcfile=src/backend/.pylintrc", "--load-plugins=pylint_airflow"]
+        
+  # Local hooks specific to Airflow migration
+  - repo: local
+    hooks:
+      # Validates DAGs are properly formatted for Airflow 2.X
+      - id: airflow-dag-validation
+        name: Airflow DAG validation
+        entry: python -m airflow dags validate
+        language: system
+        files: ^src/backend/dags/.*\.py$
+        pass_filenames: false
+        
+      # Checks compatibility between Airflow 1.10.15 and 2.X
+      - id: migration-compatibility-check
+        name: Migration compatibility check
+        entry: python src/test/migration_tests/test_airflow1_to_airflow2_migration.py
+        language: system
+        files: ^src/backend/.*\.py$
+        pass_filenames: false
+        
+      # Ensures configurations are valid for Cloud Composer 2
+      - id: composer-config-validation
+        name: Cloud Composer config validation
+        entry: python src/backend/scripts/validate_dags.py
+        language: system
+        files: ^src/backend/(dags|config)/.*\.py$
+        pass_filenames: false
