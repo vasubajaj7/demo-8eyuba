@@ -1,0 +1,168 @@
+# Prometheus configuration for Cloud Composer 2 with Airflow 2.X
+# Version compatibility:
+# - Prometheus: 2.35.0
+# - Alertmanager: 0.24.0
+
+# Global Prometheus settings
+global:
+  scrape_interval: 15s      # How frequently to scrape targets by default
+  evaluation_interval: 15s  # How frequently to evaluate rules
+  scrape_timeout: 10s       # How long to wait before timing out a scrape request
+  external_labels:
+    monitor: 'composer-monitor'
+    environment: '${ENVIRONMENT}'  # Dynamically set based on deployment environment
+
+# Scrape configurations
+scrape_configs:
+  # Self-monitoring: Prometheus scrapes its own metrics
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Airflow core metrics endpoint
+  - job_name: 'composer-airflow'
+    metrics_path: '/api/v1/metrics'
+    scrape_interval: 30s
+    scheme: 'https'
+    tls_config:
+      insecure_skip_verify: false
+      ca_file: '/etc/prometheus/certs/ca.crt'
+    bearer_token_file: '/etc/prometheus/secrets/airflow-token'
+    static_configs:
+      - targets: ['${AIRFLOW_WEBSERVER_HOST}:${AIRFLOW_WEBSERVER_PORT}']
+        labels:
+          environment: '${ENVIRONMENT}'
+          service: 'airflow-webserver'
+    relabel_configs:
+      - source_labels: ['__address__']
+        target_label: 'instance'
+    metric_relabel_configs:
+      - source_labels: ['__name__']
+        regex: 'airflow_dag_processing_.*'
+        action: 'keep'
+
+  # DAG processor metrics
+  - job_name: 'composer-dag-processor'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['${DAG_PROCESSOR_HOST}:${DAG_PROCESSOR_PORT}']
+        labels:
+          environment: '${ENVIRONMENT}'
+          service: 'airflow-dag-processor'
+
+  # Airflow scheduler metrics
+  - job_name: 'composer-scheduler'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['${SCHEDULER_HOST}:${SCHEDULER_PORT}']
+        labels:
+          environment: '${ENVIRONMENT}'
+          service: 'airflow-scheduler'
+
+  # Airflow worker metrics
+  - job_name: 'composer-worker'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['${WORKER_HOST}:${WORKER_PORT}']
+        labels:
+          environment: '${ENVIRONMENT}'
+          service: 'airflow-worker'
+
+  # Airflow webserver metrics
+  - job_name: 'composer-webserver'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['${WEBSERVER_HOST}:${WEBSERVER_PORT}']
+        labels:
+          environment: '${ENVIRONMENT}'
+          service: 'airflow-webserver'
+
+  # Node exporter metrics (host-level metrics)
+  - job_name: 'node-exporter'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['${NODE_EXPORTER_HOST}:9100']
+        labels:
+          environment: '${ENVIRONMENT}'
+
+  # Redis metrics
+  - job_name: 'redis'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['${REDIS_HOST}:${REDIS_METRICS_PORT}']
+        labels:
+          environment: '${ENVIRONMENT}'
+          service: 'redis'
+
+  # PostgreSQL metrics
+  - job_name: 'postgres'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['${POSTGRES_EXPORTER_HOST}:9187']
+        labels:
+          environment: '${ENVIRONMENT}'
+          service: 'postgres'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['${ALERTMANAGER_HOST}:9093']
+      scheme: 'http'
+      timeout: '10s'
+      api_version: 'v2'
+
+# Rule files
+rule_files:
+  - '/etc/prometheus/rules/alert-rules.yaml'
+
+# Storage configuration
+storage:
+  tsdb:
+    path: '/prometheus'
+    retention_time: '15d'
+    retention_size: '10GB'
+
+# Remote write configuration for Google Cloud Monitoring integration
+remote_write:
+  - url: 'https://monitoring.googleapis.com/v1/projects/${PROJECT_ID}/locations/global/prometheus/api/v1/write'
+    basic_auth:
+      username: ''
+      password_file: '/etc/prometheus/secrets/gcp-token'
+    queue_config:
+      capacity: 2500
+      max_shards: 200
+      max_samples_per_send: 500
+    write_relabel_configs:
+      - source_labels: ['__name__']
+        regex: 'up|airflow_.*|composer_.*|node_memory_.*|node_cpu_.*|node_filesystem_.*|redis_.*|pg_.*'
+        action: 'keep'
+
+# Environment-specific settings
+# These will be applied based on the ENVIRONMENT variable
+environment_specific_settings:
+  dev:
+    scrape_interval: 30s
+    evaluation_interval: 30s
+    storage:
+      tsdb:
+        retention_time: '7d'
+        retention_size: '5GB'
+  qa:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    storage:
+      tsdb:
+        retention_time: '10d'
+        retention_size: '10GB'
+  prod:
+    scrape_interval: 10s
+    evaluation_interval: 10s
+    storage:
+      tsdb:
+        retention_time: '30d'
+        retention_size: '20GB'
